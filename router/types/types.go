@@ -45,6 +45,11 @@ type DestinationJobT struct {
 	Batched          bool                       `json:"batched"`
 	StatusCode       int                        `json:"statusCode"`
 	Error            string                     `json:"error"`
+	DestResp         DestResp                   `json:"destResp"`
+}
+type DestResp struct {
+	StatusCode int
+	Resp       string
 }
 
 func (dj *DestinationJobT) MinJobID() int64 {
