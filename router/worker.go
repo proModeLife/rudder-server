@@ -553,6 +553,12 @@ func (w *worker) processDestinationJobs() {
 				}
 				errorAt = routerutils.ERROR_AT_TF
 			}
+		} else if destinationJob.StatusCode == 298 {
+			respStatusCode = destinationJob.StatusCode
+			respBody = "filtering this event"
+		} else if destinationJob.StatusCode == 299 {
+			respStatusCode = destinationJob.DestResp.StatusCode
+			respBody = destinationJob.DestResp.Resp
 		} else {
 			respStatusCode = destinationJob.StatusCode
 			respBody = destinationJob.Error
@@ -761,6 +767,9 @@ func (w *worker) postStatusOnResponseQ(respStatusCode int, payload json.RawMessa
 
 	if isSuccessStatus(respStatusCode) {
 		status.JobState = jobsdb.Succeeded.State
+		if respStatusCode == 298 {
+			status.JobState = jobsdb.Filtered.State
+		}
 		w.logger.Debugf("sending success status to response")
 		w.rt.responseQ <- workerJobStatus{userID: destinationJobMetadata.UserID, worker: w, job: destinationJobMetadata.JobT, status: status}
 	} else {
