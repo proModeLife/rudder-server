@@ -38,17 +38,19 @@ func TestWorkerPool(t *testing.T) {
 
 		if pipelining {
 			var limiterWg sync.WaitGroup
-			wh.limiters.query = kitsync.NewLimiter(poolCtx, &limiterWg, "query", 2, stats.Default)
+			wh.limiters.gwQuery = kitsync.NewLimiter(poolCtx, &limiterWg, "gwQuery", 2, stats.Default)
 			wh.limiters.process = kitsync.NewLimiter(poolCtx, &limiterWg, "process", 2, stats.Default)
 			wh.limiters.store = kitsync.NewLimiter(poolCtx, &limiterWg, "store", 2, stats.Default)
 			wh.limiters.transform = kitsync.NewLimiter(poolCtx, &limiterWg, "transform", 2, stats.Default)
+			wh.limiters.tQuery = kitsync.NewLimiter(poolCtx, &limiterWg, "tQuery", 2, stats.Default)
+			wh.limiters.tStore = kitsync.NewLimiter(poolCtx, &limiterWg, "tStore", 2, stats.Default)
 			defer limiterWg.Wait()
 		}
 
 		defer poolCancel()
 
 		// create a worker pool
-		wp := workerpool.New(poolCtx, func(partition string) workerpool.Worker { return newProcessorWorker(partition, wh) }, logger.NOP)
+		wp := workerpool.New(poolCtx, func(partition string) workerpool.Worker { return newMultiplexWorker(partition, wh) }, logger.NOP)
 
 		// start pinging for work for 100 partitions
 		var wg sync.WaitGroup
@@ -116,7 +118,7 @@ func TestWorkerPoolIdle(t *testing.T) {
 
 	// create a worker pool
 	wp := workerpool.New(poolCtx,
-		func(partition string) workerpool.Worker { return newProcessorWorker(partition, wh) },
+		func(partition string) workerpool.Worker { return newMultiplexWorker(partition, wh) },
 		logger.NOP,
 		workerpool.WithCleanupPeriod(200*time.Millisecond),
 		workerpool.WithIdleTimeout(200*time.Millisecond))
@@ -149,13 +151,23 @@ type mockWorkerHandle struct {
 	}
 
 	limiters struct {
-		query     kitsync.Limiter
+		gwQuery   kitsync.Limiter
 		process   kitsync.Limiter
 		transform kitsync.Limiter
 		store     kitsync.Limiter
+		tQuery    kitsync.Limiter
+		tStore    kitsync.Limiter
 	}
 
 	limitsReached bool
+}
+
+func (m *mockWorkerHandle) multiplex(partition string, subJobs subJob) *tStore {
+	return &tStore{}
+}
+
+func (m *mockWorkerHandle) storeToTransformDB(ctx context.Context, partition string, storeJob *tStore) error {
+	return nil
 }
 
 func (m *mockWorkerHandle) validate(t *testing.T) {
@@ -189,15 +201,21 @@ func (*mockWorkerHandle) rsourcesService() rsources.JobService {
 }
 
 func (m *mockWorkerHandle) handlePendingGatewayJobs(key string) bool {
-	jobs := m.getJobs(key)
+	jobs := m.getGWJobs(key)
 	if len(jobs.Jobs) > 0 {
 		_ = m.markExecuting(jobs.Jobs)
 	}
 	rsourcesStats := rsources.NewStatsCollector(m.rsourcesService())
 	for _, subJob := range m.jobSplitter(jobs.Jobs, rsourcesStats) {
-		m.Store(key,
-			m.transformations(key,
-				m.processJobsForDest(key, subJob),
+		m.Store(
+			context.TODO(),
+			key,
+			m.transformations(
+				key,
+				m.processJobsForDest(
+					key,
+					subJob,
+				),
 			),
 		)
 	}
@@ -210,9 +228,9 @@ func (*mockWorkerHandle) stats() *processorStats {
 	}
 }
 
-func (m *mockWorkerHandle) getJobs(partition string) jobsdb.JobsResult {
-	if m.limiters.query != nil {
-		defer m.limiters.query.Begin(partition)()
+func (m *mockWorkerHandle) getGWJobs(partition string) jobsdb.JobsResult {
+	if m.limiters.gwQuery != nil {
+		defer m.limiters.gwQuery.Begin(partition)()
 	}
 	m.statsMu.Lock()
 	defer m.statsMu.Unlock()
@@ -289,7 +307,7 @@ func (m *mockWorkerHandle) transformations(partition string, in *transformationM
 	}
 }
 
-func (m *mockWorkerHandle) Store(partition string, in *storeMessage) {
+func (m *mockWorkerHandle) Store(_ context.Context, partition string, in *storeMessage) {
 	if m.limiters.store != nil {
 		defer m.limiters.store.Begin(partition)()
 	}

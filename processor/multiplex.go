@@ -13,6 +13,7 @@ import (
 	"github.com/rudderlabs/rudder-server/processor/integrations"
 	"github.com/rudderlabs/rudder-server/processor/transformer"
 	"github.com/rudderlabs/rudder-server/services/dedup"
+	"github.com/rudderlabs/rudder-server/services/rsources"
 	"github.com/rudderlabs/rudder-server/utils/misc"
 	"github.com/rudderlabs/rudder-server/utils/types"
 	"golang.org/x/sync/errgroup"
@@ -23,7 +24,7 @@ import (
 // 2. multiplexes them * numConnections
 //
 // 3. stores to transform jobsdb
-func (proc *Handle) multiplex(partition string, subJobs subJob) error {
+func (proc *Handle) multiplex(partition string, subJobs subJob) *tStore {
 	if proc.limiter.preprocess != nil {
 		defer proc.limiter.preprocess.BeginWithPriority(partition, proc.getLimiterPriority(partition))()
 	}
@@ -277,7 +278,7 @@ func (proc *Handle) multiplex(partition string, subJobs subJob) error {
 	// Placing the trackingPlan validation filters here.
 	// Else further down events are duplicated by destId, so multiple validation takes places for same event
 	validateEventsStart := time.Now()
-	validatedEventsBySourceId, validatedReportMetrics, validatedErrorJobs, _ := proc.validateEvents(groupedEventsBySourceId, eventsByMessageID)
+	validatedEventsBySourceId, validatedReportMetrics, validatedErrorJobs, trackingPlanEnabledMap := proc.validateEvents(groupedEventsBySourceId, eventsByMessageID)
 	validateEventsTime := time.Since(validateEventsStart)
 	defer proc.stats.validateEventsTime.SendTiming(validateEventsTime)
 
@@ -291,6 +292,7 @@ func (proc *Handle) multiplex(partition string, subJobs subJob) error {
 	jobsToTransform := make([]*jobsdb.JobT, 0)
 	// The below part further segregates events by sourceID and DestinationID.
 	for sourceIdT, eventList := range validatedEventsBySourceId {
+		trackingPlanEnabled := trackingPlanEnabledMap[sourceIdT]
 		for idx := range eventList {
 			event := &eventList[idx]
 			sourceId := string(sourceIdT)
@@ -337,6 +339,7 @@ func (proc *Handle) multiplex(partition string, subJobs subJob) error {
 						DestinationDefinitionID: destination.DestinationDefinition.ID,
 						RecordID:                event.Metadata.RecordID,
 						WorkspaceId:             workspaceID,
+						TrackingPlanEnabled:     trackingPlanEnabled,
 					}
 					marshalledParams, err := jsonfast.Marshal(params)
 					if err != nil {
@@ -376,7 +379,41 @@ func (proc *Handle) multiplex(partition string, subJobs subJob) error {
 	// processJob throughput per second.
 	proc.stats.processJobThroughput.Count(processJobThroughput)
 
-	g, groupCtx := errgroup.WithContext(context.Background())
+	return &tStore{
+		tJobs:           jobsToTransform,
+		procErrorJobs:   procErrorJobs,
+		statusList:      statusList,
+		eventSchemaJobs: eventSchemaJobs,
+		archivalJobs:    archivalJobs,
+		reports:         reportMetrics,
+		rsourcesStats:   subJobs.rsourcesStats,
+	}
+}
+
+type tStore struct {
+	tJobs           []*jobsdb.JobT
+	procErrorJobs   []*jobsdb.JobT
+	archivalJobs    []*jobsdb.JobT
+	eventSchemaJobs []*jobsdb.JobT
+	reports         []*types.PUReportedMetric
+	statusList      []*jobsdb.JobStatusT
+	rsourcesStats   rsources.StatsCollector
+	dedupKeys       map[string]struct{} // TODO
+	sourceDupStatus map[dupStatKey]int  // TODO
+}
+
+func (proc *Handle) storeToTransformDB(ctx context.Context, partition string, storeJob *tStore) error {
+	if proc.limiter.tStore != nil {
+		defer proc.limiter.tStore.BeginWithPriority(partition, proc.getLimiterPriority(partition))()
+	}
+	g, groupCtx := errgroup.WithContext(ctx)
+
+	eventSchemaJobs := storeJob.eventSchemaJobs
+	archivalJobs := storeJob.archivalJobs
+	jobsToTransform := storeJob.tJobs
+	procErrorJobs := storeJob.procErrorJobs
+	reportMetrics := storeJob.reports
+	statusList := storeJob.statusList
 
 	g.Go(func() error {
 		if len(eventSchemaJobs) == 0 {
@@ -491,10 +528,14 @@ func (proc *Handle) multiplex(partition string, subJobs subJob) error {
 						); err != nil {
 							return err
 						}
+						// rsources stats
+						storeJob.rsourcesStats.JobStatusesUpdated(statusList)
+						if err := storeJob.rsourcesStats.Publish(ctx, tx.SqlTx()); err != nil {
+							return fmt.Errorf("publishing rsources stats: %w", err)
+						}
 						if proc.isReportingEnabled() {
 							proc.reporting.Report(reportMetrics, tx.SqlTx())
 						}
-
 						return nil
 					},
 				)
@@ -505,6 +546,8 @@ func (proc *Handle) multiplex(partition string, subJobs subJob) error {
 		proc.logger.Debug("[Processor] Total jobs written to status: ", len(statusList))
 		return nil
 	})
+
+	// TODO: commit dedupKeys
 
 	return g.Wait()
 }

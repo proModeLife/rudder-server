@@ -480,7 +480,7 @@ var _ = Describe("Processor with event schemas v2", Ordered, func() {
 		proc.config.eventSchemaV2Enabled = true
 		isolationStrategy, err := isolation.GetStrategy(isolation.ModeNone)
 		Expect(err).To(BeNil())
-		proc.isolationStrategy = isolationStrategy
+		proc.gwIsolationStrategy = isolationStrategy
 		return proc
 	}
 
@@ -681,7 +681,7 @@ var _ = Describe("Processor with ArchivalV2 enabled", Ordered, func() {
 		proc.config.archivalEnabled = true
 		isolationStrategy, err := isolation.GetStrategy(isolation.ModeNone)
 		Expect(err).To(BeNil())
-		proc.isolationStrategy = isolationStrategy
+		proc.gwIsolationStrategy = isolationStrategy
 		return proc
 	}
 
@@ -1021,7 +1021,7 @@ var _ = Describe("Processor", Ordered, func() {
 		setEnableEventSchemasFeature(proc, false)
 		isolationStrategy, err := isolation.GetStrategy(isolation.ModeNone)
 		Expect(err).To(BeNil())
-		proc.isolationStrategy = isolationStrategy
+		proc.gwIsolationStrategy = isolationStrategy
 		return proc
 	}
 	BeforeEach(func() {

@@ -314,6 +314,9 @@ type JobsDB interface {
 	// GetDistinctParameterValues returns the list of distinct parameter values inside the jobs tables
 	GetDistinctParameterValues(ctx context.Context, parameterName string) (values []string, err error)
 
+	// GetDistinctConnections returns the list of distinct connections inside the jobs tables
+	GetDistinctConnections(ctx context.Context) ([]string, error)
+
 	/* Admin */
 
 	Ping() error
@@ -1413,7 +1416,7 @@ func (jd *Handle) createDSInTx(tx *Tx, newDS dataSetT) error {
 	if _, err = tx.ExecContext(ctx, fmt.Sprintf(`CREATE INDEX "idx_%[1]s_cv" ON %[1]q (custom_val)`, newDS.JobTable)); err != nil {
 		return err
 	}
-	for _, param := range cacheParameterFilters {
+	for _, param := range indexParameterFilters {
 		if _, err = tx.ExecContext(ctx, fmt.Sprintf(`CREATE INDEX "idx_%[1]s_%[2]s" ON %[1]q USING BTREE ((parameters->>'%[2]s'))`, newDS.JobTable, param)); err != nil {
 			return err
 		}
@@ -1942,7 +1945,8 @@ func (jd *Handle) GetToProcess(ctx context.Context, params GetQueryParams, more 
 	return res.MoreJobsResult, res.err
 }
 
-var cacheParameterFilters = []string{"source_id", "destination_id"}
+var cacheParameterFilters = []string{"source_id", "destination_id", "connection"}
+var indexParameterFilters = []string{"source_id", "destination_id"}
 
 func (jd *Handle) GetPileUpCounts(ctx context.Context) (map[string]map[string]int, error) {
 	if !jd.dsMigrationLock.RTryLockWithCtx(ctx) {
@@ -2084,6 +2088,51 @@ func (jd *Handle) GetDistinctParameterValues(ctx context.Context, parameterName 
 				  ORDER BY parameters->>'%[1]s' LIMIT 1) s)
 			  )
 			  SELECT * FROM t) a`, parameterName, ds.JobTable))
+	}
+	query := strings.Join(queries, " UNION ")
+	rows, err := jd.dbHandle.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var value string
+		err := rows.Scan(&value)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+func (jd *Handle) GetDistinctConnections(ctx context.Context) ([]string, error) {
+	if !jd.dsMigrationLock.RTryLockWithCtx(ctx) {
+		return nil, fmt.Errorf("could not acquire a migration read lock: %w", ctx.Err())
+	}
+	defer jd.dsMigrationLock.RUnlock()
+	if !jd.dsListLock.RTryLockWithCtx(ctx) {
+		return nil, fmt.Errorf("could not acquire a dslist read lock: %w", ctx.Err())
+	}
+	dsList := jd.getDSList()
+	jd.dsListLock.RUnlock()
+
+	var values []string
+	var queries []string
+	connectionString := "concat_ws('::',coalesce(parameters->>'source_id',''),coalesce(parameters->>'destination_id',''))"
+	for _, ds := range dsList {
+		queries = append(queries, fmt.Sprintf(`SELECT * FROM (WITH RECURSIVE t AS (
+			(SELECT %[1]s as parameter FROM %[2]q ORDER BY %[1]s LIMIT 1)
+			UNION ALL
+			(SELECT s.* FROM t, LATERAL(
+			  SELECT %[1]s as parameter FROM %[2]q f
+			  WHERE %[1]s > t.parameter
+			  ORDER BY %[1]s LIMIT 1) s)
+		  )
+		  SELECT * FROM t) a`, connectionString, ds.JobTable))
 	}
 	query := strings.Join(queries, " UNION ")
 	rows, err := jd.dbHandle.QueryContext(ctx, query)

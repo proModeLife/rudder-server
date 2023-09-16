@@ -100,15 +100,19 @@ type Handle struct {
 	rsourcesService           rsources.JobService
 	destDebugger              destinationdebugger.DestinationDebugger
 	transDebugger             transformationdebugger.TransformationDebugger
-	isolationStrategy         isolation.Strategy
+	gwIsolationStrategy       isolation.Strategy
+	trnsfrmIsolationStrategy  isolation.Strategy
 	limiter                   struct {
-		read       kitsync.Limiter
+		gwRead     kitsync.Limiter
 		preprocess kitsync.Limiter
+		tStore     kitsync.Limiter
+		tRead      kitsync.Limiter
 		transform  kitsync.Limiter
 		store      kitsync.Limiter
 	}
 	config struct {
-		isolationMode             isolation.Mode
+		gwIsolationMode           isolation.Mode
+		trnsfrmIsolationMode      isolation.Mode
 		mainLoopTimeout           time.Duration
 		featuresRetryMaxAttempts  int
 		enablePipelining          bool
@@ -217,6 +221,7 @@ type ParametersT struct {
 	SourceCategory          string      `json:"source_category"`
 	RecordID                interface{} `json:"record_id"`
 	WorkspaceId             string      `json:"workspaceId"`
+	TrackingPlanEnabled     bool        `json:"tracking_plan_enabled"`
 }
 
 type MetricMetadata struct {
@@ -462,15 +467,18 @@ func (proc *Handle) setupReloadableVars() {
 func (proc *Handle) Start(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	var err error
-	proc.logger.Infof("Starting processor in isolation mode: %s", proc.config.isolationMode)
-	if proc.isolationStrategy, err = isolation.GetStrategy(proc.config.isolationMode); err != nil {
-		return fmt.Errorf("resolving isolation strategy for mode %q: %w", proc.config.isolationMode, err)
+	proc.logger.Infof("Starting processor in isolation mode: %s", proc.config.gwIsolationMode)
+	if proc.gwIsolationStrategy, err = isolation.GetStrategy(proc.config.gwIsolationMode); err != nil {
+		return fmt.Errorf("resolving gw isolation strategy for mode %q: %w", proc.config.gwIsolationMode, err)
+	}
+	if proc.trnsfrmIsolationStrategy, err = isolation.GetStrategy(proc.config.trnsfrmIsolationMode); err != nil {
+		return fmt.Errorf("resolving transform isolation strategy for mode %q: %w", proc.config.trnsfrmIsolationMode, err)
 	}
 
 	// limiters
 	s := proc.statsFactory
 	var limiterGroup sync.WaitGroup
-	proc.limiter.read = kitsync.NewLimiter(ctx, &limiterGroup, "proc_read",
+	proc.limiter.gwRead = kitsync.NewLimiter(ctx, &limiterGroup, "proc_read",
 		config.GetInt("Processor.Limiter.read.limit", 50),
 		s,
 		kitsync.WithLimiterDynamicPeriod(config.GetDuration("Processor.Limiter.read.dynamicPeriod", 1, time.Second)))
@@ -486,6 +494,14 @@ func (proc *Handle) Start(ctx context.Context) error {
 		config.GetInt("Processor.Limiter.store.limit", 50),
 		s,
 		kitsync.WithLimiterDynamicPeriod(config.GetDuration("Processor.Limiter.store.dynamicPeriod", 1, time.Second)))
+	proc.limiter.tRead = kitsync.NewLimiter(ctx, &limiterGroup, "proc_tRead",
+		config.GetInt("Processor.Limiter.tRead.limit", 50),
+		s,
+		kitsync.WithLimiterDynamicPeriod(config.GetDuration("Processor.Limiter.tRead.dynamicPeriod", 1, time.Second)))
+	proc.limiter.tStore = kitsync.NewLimiter(ctx, &limiterGroup, "proc_tStore",
+		config.GetInt("Processor.Limiter.tStore.limit", 50),
+		s,
+		kitsync.WithLimiterDynamicPeriod(config.GetDuration("Processor.Limiter.tStore.dynamicPeriod", 1, time.Second)))
 	g.Go(func() error {
 		limiterGroup.Wait()
 		return nil
@@ -493,7 +509,7 @@ func (proc *Handle) Start(ctx context.Context) error {
 
 	// pinger loop
 	g.Go(misc.WithBugsnag(func() error {
-		proc.logger.Info("Starting pinger loop")
+		proc.logger.Info("Starting processor pinger loop")
 		proc.backendConfig.WaitForConfig(ctx)
 		proc.logger.Info("Backend config received")
 		// waiting for reporting client setup
@@ -514,7 +530,7 @@ func (proc *Handle) Start(ctx context.Context) error {
 		proc.logger.Info("Async init group done")
 
 		h := &workerHandleAdapter{proc}
-		pool := workerpool.New(ctx, func(partition string) workerpool.Worker { return newProcessorWorker(partition, h) }, proc.logger)
+		pool := workerpool.New(ctx, func(partition string) workerpool.Worker { return newMultiplexWorker(partition, h) }, proc.logger.Child("gw_read_pool"))
 		defer pool.Shutdown()
 		for {
 			select {
@@ -522,7 +538,44 @@ func (proc *Handle) Start(ctx context.Context) error {
 				return nil
 			case <-time.After(proc.config.pingerSleep):
 			}
-			for _, partition := range proc.activePartitions(ctx) {
+			for _, partition := range proc.activePartitions(ctx, proc.gwIsolationStrategy) {
+				pool.PingWorker(partition)
+			}
+		}
+	}))
+
+	// transform loop
+	g.Go(misc.WithBugsnag(func() error {
+		proc.logger.Info("Starting transform pinger loop")
+		proc.backendConfig.WaitForConfig(ctx)
+		proc.logger.Info("Backend config received")
+		// waiting for reporting client setup
+		if proc.reporting != nil && proc.reportingEnabled {
+			if err := proc.reporting.WaitForSetup(ctx, types.CoreReportingClient); err != nil {
+				return err
+			}
+		}
+
+		// waiting for init group
+		proc.logger.Info("Waiting for async init group")
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-proc.config.asyncInit.Wait():
+			// proceed
+		}
+		proc.logger.Info("Async init group done")
+
+		h := &workerHandleAdapter{proc}
+		pool := workerpool.New(ctx, func(partition string) workerpool.Worker { return newTransformWorker(partition, h) }, proc.logger.Child("transform_read_pool"))
+		defer pool.Shutdown()
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(proc.config.pingerSleep):
+			}
+			for _, partition := range proc.activePartitions(ctx, proc.trnsfrmIsolationStrategy) {
 				pool.PingWorker(partition)
 			}
 		}
@@ -544,9 +597,10 @@ func (proc *Handle) Start(ctx context.Context) error {
 	return g.Wait()
 }
 
-func (proc *Handle) activePartitions(ctx context.Context) []string {
+func (proc *Handle) activePartitions(ctx context.Context, strategy isolation.Strategy) []string {
+	// TODO: send isolationMode and maybe more to use as a stat tags
 	defer proc.statsFactory.NewStat("proc_active_partitions_time", stats.TimerType).RecordDuration()()
-	keys, err := proc.isolationStrategy.ActivePartitions(ctx, proc.gatewayDB)
+	keys, err := strategy.ActivePartitions(ctx, proc.gatewayDB)
 	if err != nil && ctx.Err() == nil {
 		// TODO: retry?
 		panic(err)
@@ -576,9 +630,10 @@ func (proc *Handle) loadConfig() {
 	if config.IsSet("WORKSPACE_NAMESPACE") {
 		defaultIsolationMode = isolation.ModeWorkspace
 	}
-	proc.config.isolationMode = isolation.Mode(config.GetString("Processor.isolationMode", string(defaultIsolationMode)))
+	proc.config.gwIsolationMode = isolation.Mode(config.GetString("Processor.isolationMode", string(defaultIsolationMode)))
+	proc.config.trnsfrmIsolationMode = isolation.Mode(config.GetString("Processor.transformIsolationMode", string(isolation.ModeConnection)))
 	// If isolation mode is not none, we need to reduce the values for some of the config variables to more sensible defaults
-	if proc.config.isolationMode != isolation.ModeNone {
+	if proc.config.gwIsolationMode != isolation.ModeNone {
 		defaultSubJobSize = 400
 		defaultMaxEventsToProcess = 2000
 		defaultPayloadLimit = 20 * bytesize.MB
@@ -1946,7 +2001,7 @@ func (proc *Handle) sendQueryRetryStats(attempt int) {
 	stats.Default.NewTaggedStat("jobsdb_query_timeout", stats.CountType, stats.Tags{"attempt": fmt.Sprint(attempt), "module": "processor"}).Count(1)
 }
 
-func (proc *Handle) Store(partition string, in *storeMessage) {
+func (proc *Handle) Store(ctx context.Context, partition string, in *storeMessage) {
 	if proc.limiter.store != nil {
 		defer proc.limiter.store.BeginWithPriority(partition, proc.getLimiterPriority(partition))()
 	}
@@ -1956,7 +2011,7 @@ func (proc *Handle) Store(partition string, in *storeMessage) {
 	// XX: Need to do this in a transaction
 	if len(batchDestJobs) > 0 {
 		err := misc.RetryWithNotify(
-			context.Background(),
+			ctx,
 			proc.jobsDBCommandTimeout,
 			proc.jobdDBMaxRetries,
 			func(ctx context.Context) error {
@@ -2003,7 +2058,7 @@ func (proc *Handle) Store(partition string, in *storeMessage) {
 				}
 			}
 			err := misc.RetryWithNotify(
-				context.Background(),
+				ctx,
 				proc.jobsDBCommandTimeout,
 				proc.jobdDBMaxRetries,
 				func(ctx context.Context) error {
@@ -2040,9 +2095,15 @@ func (proc *Handle) Store(partition string, in *storeMessage) {
 		in.procErrorJobs = append(in.procErrorJobs, jobs...)
 	}
 	if len(in.procErrorJobs) > 0 {
-		err := misc.RetryWithNotify(context.Background(), proc.jobsDBCommandTimeout, proc.jobdDBMaxRetries, func(ctx context.Context) error {
-			return proc.writeErrorDB.Store(ctx, in.procErrorJobs)
-		}, proc.sendRetryStoreStats)
+		err := misc.RetryWithNotify(
+			ctx,
+			proc.jobsDBCommandTimeout,
+			proc.jobdDBMaxRetries,
+			func(ctx context.Context) error {
+				return proc.writeErrorDB.Store(ctx, in.procErrorJobs)
+			},
+			proc.sendRetryStoreStats,
+		)
 		if err != nil {
 			proc.logger.Errorf("Store into proc error table failed with error: %v", err)
 			proc.logger.Errorf("procErrorJobs: %v", in.procErrorJobs)
@@ -2055,27 +2116,33 @@ func (proc *Handle) Store(partition string, in *storeMessage) {
 	writeJobsTime := time.Since(beforeStoreStatus)
 
 	txnStart := time.Now()
-	err := misc.RetryWithNotify(context.Background(), proc.jobsDBCommandTimeout, proc.jobdDBMaxRetries, func(ctx context.Context) error {
-		return proc.gatewayDB.WithUpdateSafeTx(ctx, func(tx jobsdb.UpdateSafeTx) error {
-			err := proc.gatewayDB.UpdateJobStatusInTx(ctx, tx, statusList, []string{proc.config.GWCustomVal}, nil)
-			if err != nil {
-				return fmt.Errorf("updating gateway jobs statuses: %w", err)
-			}
+	err := misc.RetryWithNotify(
+		ctx,
+		proc.jobsDBCommandTimeout,
+		proc.jobdDBMaxRetries,
+		func(ctx context.Context) error {
+			return proc.transformDB.WithUpdateSafeTx(ctx, func(tx jobsdb.UpdateSafeTx) error {
+				err := proc.transformDB.UpdateJobStatusInTx(ctx, tx, statusList, []string{proc.config.GWCustomVal}, nil)
+				if err != nil {
+					return fmt.Errorf("updating gateway jobs statuses: %w", err)
+				}
 
-			// rsources stats
-			in.rsourcesStats.JobStatusesUpdated(statusList)
-			err = in.rsourcesStats.Publish(ctx, tx.SqlTx())
-			if err != nil {
-				return fmt.Errorf("publishing rsources stats: %w", err)
-			}
+				// rsources stats
+				in.rsourcesStats.JobStatusesUpdated(statusList)
+				err = in.rsourcesStats.Publish(ctx, tx.SqlTx())
+				if err != nil {
+					return fmt.Errorf("publishing rsources stats: %w", err)
+				}
 
-			if proc.isReportingEnabled() {
-				proc.reporting.Report(in.reportMetrics, tx.SqlTx())
-			}
+				if proc.isReportingEnabled() {
+					proc.reporting.Report(in.reportMetrics, tx.SqlTx())
+				}
 
-			return nil
-		})
-	}, proc.sendRetryUpdateStats)
+				return nil
+			})
+		},
+		proc.sendRetryUpdateStats,
+	)
 	if err != nil {
 		panic(err)
 	}
@@ -2570,14 +2637,14 @@ func ConvertToFilteredTransformerResponse(events []transformer.TransformerEvent,
 	return transformer.Response{Events: responses, FailedEvents: failedEvents}
 }
 
-func (proc *Handle) getJobs(partition string) jobsdb.JobsResult {
-	if proc.limiter.read != nil {
-		defer proc.limiter.read.BeginWithPriority(partition, proc.getLimiterPriority(partition))()
+func (proc *Handle) getGWJobs(partition string) jobsdb.JobsResult {
+	if proc.limiter.gwRead != nil {
+		defer proc.limiter.gwRead.BeginWithPriority(partition, proc.getLimiterPriority(partition))()
 	}
 
 	s := time.Now()
 
-	proc.logger.Debugf("Processor DB Read size: %d", proc.config.maxEventsToProcess)
+	proc.logger.Debugf("Processor gwDB Read size: %d", proc.config.maxEventsToProcess)
 
 	eventCount := proc.config.maxEventsToProcess
 	if !proc.config.enableEventCount {
@@ -2589,7 +2656,7 @@ func (proc *Handle) getJobs(partition string) jobsdb.JobsResult {
 		EventsLimit:      eventCount,
 		PayloadSizeLimit: proc.adaptiveLimit(proc.payloadLimit),
 	}
-	proc.isolationStrategy.AugmentQueryParams(partition, &queryParams)
+	proc.gwIsolationStrategy.AugmentQueryParams(partition, &queryParams)
 
 	unprocessedList, err := misc.QueryWithRetriesAndNotify(context.Background(), proc.jobdDBQueryRequestTimeout, proc.jobdDBMaxRetries, func(ctx context.Context) (jobsdb.JobsResult, error) {
 		return proc.gatewayDB.GetUnprocessed(ctx, queryParams)
@@ -2649,7 +2716,66 @@ func (proc *Handle) getJobs(partition string) jobsdb.JobsResult {
 	return unprocessedList
 }
 
-func (proc *Handle) markExecuting(jobs []*jobsdb.JobT) error {
+func (proc *Handle) getTransformJobs(ctx context.Context, partition string) jobsdb.JobsResult {
+	if proc.limiter.tRead != nil {
+		defer proc.limiter.tRead.BeginWithPriority(partition, proc.getLimiterPriority(partition))()
+	}
+
+	s := time.Now()
+
+	proc.logger.Debugf("Processor transformDB Read size: %d", proc.config.maxEventsToProcess)
+
+	eventCount := proc.config.maxEventsToProcess / 2 // 2 because??
+	if !proc.config.enableEventCount {
+		eventCount = 0
+	}
+	queryParams := jobsdb.GetQueryParams{
+		JobsLimit:        proc.config.maxEventsToProcess,
+		EventsLimit:      eventCount,
+		PayloadSizeLimit: proc.adaptiveLimit(proc.payloadLimit),
+	}
+	proc.trnsfrmIsolationStrategy.AugmentQueryParams(partition, &queryParams)
+	unprocessedList, err := misc.QueryWithRetriesAndNotify(context.Background(), proc.jobdDBQueryRequestTimeout, proc.jobdDBMaxRetries, func(ctx context.Context) (jobsdb.JobsResult, error) {
+		return proc.transformDB.GetUnprocessed(ctx, queryParams)
+	}, proc.sendQueryRetryStats)
+	if err != nil {
+		proc.logger.Errorf("Failed to get unprocessed jobs from DB. Error: %v", err)
+		panic(err)
+	}
+	totalPayloadBytes := 0
+	for _, job := range unprocessedList.Jobs {
+		totalPayloadBytes += len(job.EventPayload)
+
+		if job.JobID <= proc.lastJobID {
+			proc.logger.Debugf("Out of order job_id: prev: %d cur: %d", proc.lastJobID, job.JobID)
+			proc.stats.statDBReadOutOfOrder.Count(1)
+		} else if proc.lastJobID != 0 && job.JobID != proc.lastJobID+1 {
+			proc.logger.Debugf("Out of sequence job_id: prev: %d cur: %d", proc.lastJobID, job.JobID)
+			proc.stats.statDBReadOutOfSequence.Count(1)
+		}
+		proc.lastJobID = job.JobID
+	}
+	dbReadTime := time.Since(s)
+	defer proc.stats.statDBR.SendTiming(dbReadTime)
+
+	var firstJob *jobsdb.JobT
+	var lastJob *jobsdb.JobT
+	if len(unprocessedList.Jobs) > 0 {
+		firstJob = unprocessedList.Jobs[0]
+		lastJob = unprocessedList.Jobs[len(unprocessedList.Jobs)-1]
+	}
+	proc.pipelineDelayStats(partition, firstJob, lastJob)
+
+	// check if there is work to be done
+	if len(unprocessedList.Jobs) == 0 {
+		proc.logger.Debugf("Processor DB Read Complete. No GW Jobs to process.")
+		return unprocessedList
+	}
+	// TODO: more stats here
+	return unprocessedList
+}
+
+func (proc *Handle) markExecuting(jobs []*jobsdb.JobT, db jobsdb.JobsDB) error {
 	start := time.Now()
 	defer proc.stats.statMarkExecuting.Since(start)
 
@@ -2670,7 +2796,7 @@ func (proc *Handle) markExecuting(jobs []*jobsdb.JobT) error {
 	}
 	// Mark the jobs as executing
 	err := misc.RetryWithNotify(context.Background(), proc.jobsDBCommandTimeout, proc.jobdDBMaxRetries, func(ctx context.Context) error {
-		return proc.gatewayDB.UpdateJobStatus(ctx, statusList, []string{proc.config.GWCustomVal}, nil)
+		return db.UpdateJobStatus(ctx, statusList, []string{proc.config.GWCustomVal}, nil)
 	}, proc.sendRetryUpdateStats)
 	if err != nil {
 		return fmt.Errorf("marking jobs as executing: %w", err)
@@ -2684,7 +2810,7 @@ func (proc *Handle) markExecuting(jobs []*jobsdb.JobT) error {
 func (proc *Handle) handlePendingGatewayJobs(partition string) bool {
 	s := time.Now()
 
-	unprocessedList := proc.getJobs(partition)
+	unprocessedList := proc.getGWJobs(partition)
 
 	if len(unprocessedList.Jobs) == 0 {
 		return false
@@ -2693,13 +2819,18 @@ func (proc *Handle) handlePendingGatewayJobs(partition string) bool {
 	rsourcesStats := rsources.NewStatsCollector(proc.rsourcesService)
 	rsourcesStats.BeginProcessing(unprocessedList.Jobs)
 
-	proc.Store(partition,
-		proc.transformations(partition,
-			proc.processJobsForDest(partition, subJob{
-				subJobs:       unprocessedList.Jobs,
-				hasMore:       false,
-				rsourcesStats: rsourcesStats,
-			},
+	proc.Store(
+		context.Background(),
+		partition,
+		proc.transformations(
+			partition,
+			proc.processJobsForDest(
+				partition,
+				subJob{
+					subJobs:       unprocessedList.Jobs,
+					hasMore:       false,
+					rsourcesStats: rsourcesStats,
+				},
 			),
 		),
 	)

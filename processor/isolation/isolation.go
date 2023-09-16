@@ -3,6 +3,7 @@ package isolation
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/rudderlabs/rudder-server/jobsdb"
 )
@@ -10,9 +11,10 @@ import (
 type Mode string
 
 const (
-	ModeNone      Mode = "none"
-	ModeWorkspace Mode = "workspace"
-	ModeSource    Mode = "source"
+	ModeNone       Mode = "none"
+	ModeWorkspace  Mode = "workspace"
+	ModeSource     Mode = "source"
+	ModeConnection Mode = "connection"
 )
 
 // GetStrategy returns the strategy for the given isolation mode. An error is returned if the mode is invalid
@@ -24,6 +26,8 @@ func GetStrategy(mode Mode) (Strategy, error) {
 		return workspaceStrategy{}, nil
 	case ModeSource:
 		return sourceStrategy{}, nil
+	case ModeConnection:
+		return connection{}, nil
 	default:
 		return noneStrategy{}, errors.New("unsupported isolation mode")
 	}
@@ -71,4 +75,19 @@ func (sourceStrategy) ActivePartitions(ctx context.Context, db jobsdb.JobsDB) ([
 // AugmentQueryParams augments the given GetQueryParamsT by adding the partition as sourceID parameter filter
 func (sourceStrategy) AugmentQueryParams(partition string, params *jobsdb.GetQueryParams) {
 	params.ParameterFilters = append(params.ParameterFilters, jobsdb.ParameterFilterT{Name: "source_id", Value: partition})
+}
+
+type connection struct{}
+
+func (connection) ActivePartitions(ctx context.Context, db jobsdb.JobsDB) ([]string, error) {
+	return db.GetDistinctConnections(ctx)
+}
+
+func (connection) AugmentQueryParams(partition string, params *jobsdb.GetQueryParams) {
+	fields := strings.Split(partition, "::")
+	params.ParameterFilters = append(
+		params.ParameterFilters,
+		jobsdb.ParameterFilterT{Name: "source_id", Value: fields[0]},
+		jobsdb.ParameterFilterT{Name: "destination_id", Value: fields[1]},
+	)
 }

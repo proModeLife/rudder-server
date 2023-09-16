@@ -6,14 +6,13 @@ import (
 	"time"
 
 	"github.com/rudderlabs/rudder-go-kit/logger"
-	"github.com/rudderlabs/rudder-server/jobsdb"
 	"github.com/rudderlabs/rudder-server/rruntime"
 	"github.com/rudderlabs/rudder-server/services/rsources"
 	"github.com/rudderlabs/rudder-server/utils/misc"
 )
 
-// newProcessorWorker creates a new worker
-func newProcessorWorker(partition string, h workerHandle) *worker {
+// newMultiplexWorker creates a new worker
+func newMultiplexWorker(partition string, h workerHandle) *worker {
 	w := &worker{
 		handle:    h,
 		logger:    h.logger().Child(partition),
@@ -21,8 +20,7 @@ func newProcessorWorker(partition string, h workerHandle) *worker {
 	}
 	w.lifecycle.ctx, w.lifecycle.cancel = context.WithCancel(context.Background())
 	w.channel.preprocess = make(chan subJob, w.handle.config().pipelineBufferedItems)
-	w.channel.transform = make(chan *transformationMessage, w.handle.config().pipelineBufferedItems)
-	w.channel.store = make(chan *storeMessage, (w.handle.config().pipelineBufferedItems+1)*(w.handle.config().maxEventsToProcess/w.handle.config().subJobSize+1))
+	w.channel.store = make(chan *tStore, (w.handle.config().pipelineBufferedItems+1)*(w.handle.config().maxEventsToProcess/w.handle.config().subJobSize+1))
 	w.start()
 
 	return w
@@ -43,9 +41,8 @@ type worker struct {
 		wg     sync.WaitGroup     // worker wait group
 	}
 	channel struct { // worker channels
-		preprocess chan subJob                 // preprocess channel is used to send jobs to preprocess asynchronously when pipelining is enabled
-		transform  chan *transformationMessage // transform channel is used to send jobs to transform asynchronously when pipelining is enabled
-		store      chan *storeMessage          // store channel is used to send jobs to store asynchronously when pipelining is enabled
+		preprocess chan subJob  // preprocess channel is used to send jobs to preprocess asynchronously when pipelining is enabled
+		store      chan *tStore // store channel is used to send jobs to store asynchronously when pipelining is enabled
 	}
 }
 
@@ -67,53 +64,21 @@ func (w *worker) start() {
 	w.lifecycle.wg.Add(1)
 	rruntime.Go(func() {
 		defer w.lifecycle.wg.Done()
-		defer close(w.channel.transform)
+		defer close(w.channel.store)
 		defer w.logger.Debugf("preprocessing routine stopped for worker: %s", w.partition)
 		for jobs := range w.channel.preprocess {
-			w.channel.transform <- w.handle.processJobsForDest(w.partition, jobs)
-		}
-	})
-
-	// transform jobs
-	w.lifecycle.wg.Add(1)
-	rruntime.Go(func() {
-		defer w.lifecycle.wg.Done()
-		defer close(w.channel.store)
-		defer w.logger.Debugf("transform routine stopped for worker: %s", w.partition)
-		for msg := range w.channel.transform {
-			w.channel.store <- w.handle.transformations(w.partition, msg)
+			w.channel.store <- w.handle.multiplex(w.partition, jobs)
 		}
 	})
 
 	// store jobs
 	w.lifecycle.wg.Add(1)
 	rruntime.Go(func() {
-		var mergedJob *storeMessage
-		firstSubJob := true
 		defer w.lifecycle.wg.Done()
 		defer w.logger.Debugf("store routine stopped for worker: %s", w.partition)
-		for subJob := range w.channel.store {
-
-			if firstSubJob && !subJob.hasMore {
-				w.handle.Store(w.partition, subJob)
-				continue
-			}
-
-			if firstSubJob {
-				mergedJob = &storeMessage{
-					rsourcesStats:         subJob.rsourcesStats,
-					dedupKeys:             make(map[string]struct{}),
-					procErrorJobsByDestID: make(map[string][]*jobsdb.JobT),
-					sourceDupStats:        make(map[dupStatKey]int),
-					start:                 subJob.start,
-				}
-				firstSubJob = false
-			}
-			mergedJob.merge(subJob)
-
-			if !subJob.hasMore {
-				w.handle.Store(w.partition, mergedJob)
-				firstSubJob = true
+		for tStoreJob := range w.channel.store {
+			if err := w.handle.storeToTransformDB(w.lifecycle.ctx, w.partition, tStoreJob); err != nil {
+				panic(err)
 			}
 		}
 	})
@@ -121,42 +86,41 @@ func (w *worker) start() {
 
 // Work picks the next set of jobs from the jobsdb and returns [true] if jobs were picked, [false] otherwise
 func (w *worker) Work() (worked bool) {
-	if w.handle.config().enablePipelining {
-		start := time.Now()
-		jobs := w.handle.getJobs(w.partition)
-		afterGetJobs := time.Now()
-		if len(jobs.Jobs) == 0 {
-			return
-		}
-		worked = true
-
-		if err := w.handle.markExecuting(jobs.Jobs); err != nil {
-			w.logger.Error(err)
-			panic(err)
-		}
-
-		w.handle.stats().DBReadThroughput.Count(throughputPerSecond(jobs.EventsCount, time.Since(start)))
-
-		rsourcesStats := rsources.NewStatsCollector(w.handle.rsourcesService())
-		rsourcesStats.BeginProcessing(jobs.Jobs)
-		subJobs := w.handle.jobSplitter(jobs.Jobs, rsourcesStats)
-		for _, subJob := range subJobs {
-			w.channel.preprocess <- subJob
-		}
-
-		if !jobs.LimitsReached {
-			readLoopSleep := w.handle.config().readLoopSleep
-			if elapsed := time.Since(afterGetJobs); elapsed < readLoopSleep {
-				if err := misc.SleepCtx(w.lifecycle.ctx, readLoopSleep-elapsed); err != nil {
-					return
-				}
-			}
-		}
-
-		return
-	} else {
+	if !w.handle.config().enablePipelining {
 		return w.handle.handlePendingGatewayJobs(w.partition)
 	}
+	start := time.Now()
+	jobs := w.handle.getGWJobs(w.partition)
+	afterGetJobs := time.Now()
+	if len(jobs.Jobs) == 0 {
+		return
+	}
+	worked = true
+
+	if err := w.handle.markExecuting(jobs.Jobs, w.handle.config().gwDB); err != nil {
+		w.logger.Error(err)
+		panic(err)
+	}
+
+	w.handle.stats().DBReadThroughput.Count(throughputPerSecond(jobs.EventsCount, time.Since(start)))
+
+	rsourcesStats := rsources.NewStatsCollector(w.handle.rsourcesService())
+	rsourcesStats.BeginProcessing(jobs.Jobs)
+	w.channel.preprocess <- subJob{
+		subJobs:       jobs.Jobs,
+		rsourcesStats: rsourcesStats,
+	}
+
+	if !jobs.LimitsReached {
+		readLoopSleep := w.handle.config().readLoopSleep
+		if elapsed := time.Since(afterGetJobs); elapsed < readLoopSleep {
+			if err := misc.SleepCtx(w.lifecycle.ctx, readLoopSleep-elapsed); err != nil {
+				return
+			}
+		}
+	}
+
+	return
 }
 
 func (w *worker) SleepDurations() (min, max time.Duration) {
