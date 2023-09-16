@@ -28,6 +28,7 @@ type LifecycleManager struct {
 	currentCancel    context.CancelFunc
 	waitGroup        interface{ Wait() }
 	gatewayDB        *jobsdb.Handle
+	transformDB      *jobsdb.Handle
 	routerDB         *jobsdb.Handle
 	batchRouterDB    *jobsdb.Handle
 	readErrDB        *jobsdb.Handle
@@ -54,7 +55,7 @@ func (proc *LifecycleManager) Start() error {
 	}
 
 	proc.Handle.Setup(
-		proc.BackendConfig, proc.gatewayDB, proc.routerDB, proc.batchRouterDB, proc.readErrDB, proc.writeErrDB, proc.esDB, proc.arcDB,
+		proc.BackendConfig, proc.gatewayDB, proc.transformDB, proc.routerDB, proc.batchRouterDB, proc.readErrDB, proc.writeErrDB, proc.esDB, proc.arcDB,
 		proc.ReportingI, proc.transientSources, proc.fileuploader, proc.rsourcesService, proc.destDebugger, proc.transDebugger,
 	)
 
@@ -91,7 +92,7 @@ func WithFeaturesRetryMaxAttempts(maxAttempts int) func(l *LifecycleManager) {
 }
 
 // New creates a new Processor instance
-func New(ctx context.Context, clearDb *bool, gwDb, rtDb, brtDb, errDbForRead, errDBForWrite, esDB, arcDB *jobsdb.Handle,
+func New(ctx context.Context, clearDb *bool, gwDb, transformDB, rtDb, brtDb, errDbForRead, errDBForWrite, esDB, arcDB *jobsdb.Handle,
 	reporting types.Reporting, transientSources transientsource.Service, fileuploader fileuploader.Provider,
 	rsourcesService rsources.JobService, destDebugger destinationdebugger.DestinationDebugger, transDebugger transformationdebugger.TransformationDebugger,
 	opts ...Opts,
@@ -101,6 +102,7 @@ func New(ctx context.Context, clearDb *bool, gwDb, rtDb, brtDb, errDbForRead, er
 		mainCtx:          ctx,
 		gatewayDB:        gwDb,
 		routerDB:         rtDb,
+		transformDB:      transformDB,
 		batchRouterDB:    brtDb,
 		readErrDB:        errDbForRead,
 		writeErrDB:       errDBForWrite,

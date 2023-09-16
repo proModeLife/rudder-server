@@ -153,6 +153,15 @@ func (a *processorApp) StartRudderCore(ctx context.Context, options *app.Options
 		jobsdb.WithSkipMaintenanceErr(config.GetBool("Gateway.jobsDB.skipMaintenanceError", true)),
 	)
 	defer gwDBForProcessor.Close()
+	transformDB := jobsdb.NewForReadWrite(
+		"transform",
+		jobsdb.WithClearDB(options.ClearDB),
+		jobsdb.WithPreBackupHandlers(prebackupHandlers),
+		jobsdb.WithDSLimit(&a.config.processorDSLimit),
+		jobsdb.WithFileUploaderProvider(fileUploaderProvider),
+		jobsdb.WithSkipMaintenanceErr(config.GetBool("Processor.jobsDB.skipMaintenanceError", false)),
+	)
+	defer transformDB.Close()
 	routerDB := jobsdb.NewForReadWrite(
 		"rt",
 		jobsdb.WithClearDB(options.ClearDB),
@@ -233,6 +242,7 @@ func (a *processorApp) StartRudderCore(ctx context.Context, options *app.Options
 		ctx,
 		&options.ClearDB,
 		gwDBForProcessor,
+		transformDB,
 		routerDB,
 		batchRouterDB,
 		errDBForRead,
@@ -279,6 +289,7 @@ func (a *processorApp) StartRudderCore(ctx context.Context, options *app.Options
 		Provider:         modeProvider,
 		GatewayComponent: false,
 		GatewayDB:        gwDBForProcessor,
+		TransformDB:      transformDB,
 		RouterDB:         routerDB,
 		BatchRouterDB:    batchRouterDB,
 		ErrorDB:          errDBForRead,

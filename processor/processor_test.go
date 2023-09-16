@@ -50,6 +50,7 @@ type testContext struct {
 	mockCtrl              *gomock.Controller
 	mockBackendConfig     *mocksBackendConfig.MockBackendConfig
 	mockGatewayJobsDB     *mocksJobsDB.MockJobsDB
+	mockTransformDB       *mocksJobsDB.MockJobsDB
 	mockRouterJobsDB      *mocksJobsDB.MockJobsDB
 	mockBatchRouterJobsDB *mocksJobsDB.MockJobsDB
 	mockReadProcErrorsDB  *mocksJobsDB.MockJobsDB
@@ -65,6 +66,7 @@ func (c *testContext) Setup() {
 	c.mockCtrl = gomock.NewController(GinkgoT())
 	c.mockBackendConfig = mocksBackendConfig.NewMockBackendConfig(c.mockCtrl)
 	c.mockGatewayJobsDB = mocksJobsDB.NewMockJobsDB(c.mockCtrl)
+	c.mockTransformDB = mocksJobsDB.NewMockJobsDB(c.mockCtrl)
 	c.mockRouterJobsDB = mocksJobsDB.NewMockJobsDB(c.mockCtrl)
 	c.mockBatchRouterJobsDB = mocksJobsDB.NewMockJobsDB(c.mockCtrl)
 	c.mockReadProcErrorsDB = mocksJobsDB.NewMockJobsDB(c.mockCtrl)
@@ -1047,6 +1049,7 @@ var _ = Describe("Processor", Ordered, func() {
 			processor.Setup(
 				c.mockBackendConfig,
 				c.mockGatewayJobsDB,
+				c.mockTransformDB,
 				c.mockRouterJobsDB,
 				c.mockBatchRouterJobsDB,
 				c.mockReadProcErrorsDB,
@@ -1075,6 +1078,7 @@ var _ = Describe("Processor", Ordered, func() {
 			processor.Setup(
 				c.mockBackendConfig,
 				c.mockGatewayJobsDB,
+				c.mockTransformDB,
 				c.mockRouterJobsDB,
 				c.mockBatchRouterJobsDB,
 				c.mockReadProcErrorsDB,
@@ -1108,6 +1112,7 @@ var _ = Describe("Processor", Ordered, func() {
 			processor.Setup(
 				c.mockBackendConfig,
 				c.mockGatewayJobsDB,
+				c.mockTransformDB,
 				c.mockRouterJobsDB,
 				c.mockBatchRouterJobsDB,
 				c.mockReadProcErrorsDB,
@@ -2049,6 +2054,7 @@ var _ = Describe("Processor", Ordered, func() {
 			processor.Setup(
 				c.mockBackendConfig,
 				c.mockGatewayJobsDB,
+				c.mockTransformDB,
 				c.mockRouterJobsDB,
 				c.mockBatchRouterJobsDB,
 				c.mockReadProcErrorsDB,
@@ -2106,6 +2112,7 @@ var _ = Describe("Processor", Ordered, func() {
 			processor.Setup(
 				c.mockBackendConfig,
 				c.mockGatewayJobsDB,
+				c.mockTransformDB,
 				c.mockRouterJobsDB,
 				c.mockBatchRouterJobsDB,
 				c.mockReadProcErrorsDB,
@@ -3556,6 +3563,7 @@ func Setup(processor *Handle, c *testContext, enableDedup, enableReporting bool)
 	processor.Setup(
 		c.mockBackendConfig,
 		c.mockGatewayJobsDB,
+		c.mockTransformDB,
 		c.mockRouterJobsDB,
 		c.mockBatchRouterJobsDB,
 		c.mockReadProcErrorsDB,

@@ -166,6 +166,15 @@ func (a *embeddedApp) StartRudderCore(ctx context.Context, options *app.Options)
 		jobsdb.WithFileUploaderProvider(fileUploaderProvider),
 		jobsdb.WithSkipMaintenanceErr(config.GetBool("Router.jobsDB.skipMaintenanceError", false)),
 	)
+	transformDB := jobsdb.NewForReadWrite(
+		"transform",
+		jobsdb.WithClearDB(options.ClearDB),
+		jobsdb.WithPreBackupHandlers(prebackupHandlers),
+		jobsdb.WithDSLimit(&a.config.processorDSLimit),
+		jobsdb.WithFileUploaderProvider(fileUploaderProvider),
+		jobsdb.WithSkipMaintenanceErr(config.GetBool("Processor.jobsDB.skipMaintenanceError", false)),
+	)
+	defer transformDB.Close()
 	defer routerDB.Close()
 	batchRouterDB := jobsdb.NewForReadWrite(
 		"batch_rt",
@@ -241,6 +250,7 @@ func (a *embeddedApp) StartRudderCore(ctx context.Context, options *app.Options)
 		ctx,
 		&options.ClearDB,
 		gwDBForProcessor,
+		transformDB,
 		routerDB,
 		batchRouterDB,
 		errDBForRead,
@@ -286,6 +296,7 @@ func (a *embeddedApp) StartRudderCore(ctx context.Context, options *app.Options)
 	dm := cluster.Dynamic{
 		Provider:        modeProvider,
 		GatewayDB:       gwDBForProcessor,
+		TransformDB:     transformDB,
 		RouterDB:        routerDB,
 		BatchRouterDB:   batchRouterDB,
 		ErrorDB:         errDBForRead,

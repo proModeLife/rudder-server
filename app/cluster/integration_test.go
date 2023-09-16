@@ -176,6 +176,8 @@ func TestDynamicClusterManager(t *testing.T) {
 
 	gwDB := jobsdb.NewForReadWrite("gw")
 	defer gwDB.TearDown()
+	transformDB := jobsdb.NewForReadWrite("transform")
+	defer transformDB.TearDown()
 	eschDB := jobsdb.NewForReadWrite("esch")
 	defer eschDB.TearDown()
 	archiveDB := jobsdb.NewForReadWrite("archive")
@@ -202,6 +204,7 @@ func TestDynamicClusterManager(t *testing.T) {
 		ctx,
 		&clearDb,
 		gwDB,
+		transformDB,
 		rtDB,
 		brtDB,
 		readErrDB,

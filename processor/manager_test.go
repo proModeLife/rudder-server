@@ -179,6 +179,10 @@ func TestProcessorManager(t *testing.T) {
 		jobsdb.WithConfig(c),
 	)
 	defer gwDB.Close()
+	transformDB := jobsdb.NewForReadWrite("transform",
+		jobsdb.WithConfig(c),
+	)
+	defer transformDB.Close()
 	rtDB := jobsdb.NewForReadWrite("rt",
 		jobsdb.WithConfig(c),
 	)
@@ -212,6 +216,7 @@ func TestProcessorManager(t *testing.T) {
 		ctx,
 		&clearDb,
 		gwDB,
+		transformDB,
 		rtDB,
 		brtDB,
 		readErrDB,
