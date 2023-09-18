@@ -1055,7 +1055,7 @@ var _ = Describe("Gateway", func() {
 					validBody = `{"batch": [{"data": "valid-json"}]}`
 					reqType = "batch"
 				}
-				if handlerType != "extract" {
+				if handlerType != "extract" && handlerType != "record" {
 					expectHandlerResponse(
 						handler,
 						authorizedRequest(
@@ -1088,11 +1088,16 @@ var _ = Describe("Gateway", func() {
 			}
 		})
 
-		It("should allow requests with both userId and anonymousId absent in case of extract events", func() {
+		It("should allow requests with both userId and anonymousId absent in case of extract / retl events", func() {
 			extractHandlers := map[string]http.HandlerFunc{
 				"batch":   gateway.webBatchHandler(),
 				"import":  gateway.webImportHandler(),
 				"extract": gateway.webExtractHandler(),
+			}
+			retlRecordHandlers := map[string]http.HandlerFunc{
+				"batch":  gateway.webBatchHandler(),
+				"import": gateway.webImportHandler(),
+				"record": gateway.webExtractHandler(),
 			}
 			c.mockJobsDB.EXPECT().WithStoreSafeTx(gomock.Any(), gomock.Any()).AnyTimes().Do(func(ctx context.Context, f func(tx jobsdb.StoreSafeTx) error) {
 				_ = f(jobsdb.EmptyStoreSafeTx())
@@ -1106,6 +1111,26 @@ var _ = Describe("Gateway", func() {
 					body = `{"data": "valid-json", "type": "extract"}`
 				default:
 					body = `{"batch": [{"data": "valid-json", "type": "extract"}]}`
+				}
+				expectHandlerResponse(
+					handler,
+					authorizedRequest(
+						WriteKeyEnabled,
+						bytes.NewBufferString(body),
+					),
+					http.StatusOK,
+					"OK",
+					handlerType,
+				)
+			}
+
+			for handlerType, handler := range retlRecordHandlers {
+				var body string
+				switch handlerType {
+				case "record":
+					body = `{"data": "valid-json", "type": "record"}`
+				default:
+					body = `{"batch": [{"data": "valid-json", "type": "record"}]}`
 				}
 				expectHandlerResponse(
 					handler,
@@ -1341,6 +1366,18 @@ var _ = Describe("Gateway", func() {
 			_, err := gateway.getJobDataFromRequest(req)
 			Expect(err).To(BeNil())
 		})
+
+		It("allows retl events even if userID and anonID are not present in the request payload", func() {
+			req := &webRequestT{
+				reqType:        "batch",
+				authContext:    rCtxEnabled,
+				done:           make(chan<- string),
+				userIDHeader:   userIDHeader,
+				requestPayload: []byte(`{"batch": [{"type": "record"}]}`),
+			}
+			_, err := gateway.getJobDataFromRequest(req)
+			Expect(err).To(BeNil())
+		})
 	})
 
 	Context("SaveWebhookFailures", func() {
@@ -1490,6 +1527,7 @@ func endpointsToVerify() ([]string, []string, []string) {
 		"/v1/webhook",
 		"/beacon/v1/batch",
 		"/internal/v1/extract",
+		"/internal/v1/record",
 		"/internal/v1/replay",
 		"/internal/v1/audiencelist",
 		"/v1/warehouse/pending-events",
@@ -1515,6 +1553,7 @@ func allHandlers(gw *Handle) map[string]http.HandlerFunc {
 		"import":       gw.webImportHandler(),
 		"audiencelist": gw.webAudienceListHandler(),
 		"extract":      gw.webExtractHandler(),
+		"record":       gw.webRecordHandler(),
 	}
 }
 

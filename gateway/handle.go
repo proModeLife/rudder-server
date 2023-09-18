@@ -479,8 +479,8 @@ func (gw *Handle) getJobDataFromRequest(req *webRequestT) (jobData *jobFromReq, 
 }
 
 func (gw *Handle) isNonIdentifiable(anonIDFromReq, userIDFromReq, eventType string) bool {
-	if eventType == extractEvent {
-		// extract event is allowed without user id and anonymous id
+	if eventType == extractEvent || eventType == rETLEvent {
+		// extract or rETL event is allowed without user id and anonymous id
 		return false
 	}
 	if anonIDFromReq == "" && userIDFromReq == "" {

@@ -19,6 +19,11 @@ func (gw *Handle) webExtractHandler() http.HandlerFunc {
 	return gw.callType("extract", gw.writeKeyAuth(gw.webHandler()))
 }
 
+// webRecordHandler - handler for retl requests
+func (gw *Handle) webRecordHandler() http.HandlerFunc {
+	return gw.callType("record", gw.writeKeyAuth(gw.webHandler()))
+}
+
 // webBatchHandler - handler for batch requests
 func (gw *Handle) webBatchHandler() http.HandlerFunc {
 	return gw.callType("batch", gw.writeKeyAuth(gw.webHandler()))
