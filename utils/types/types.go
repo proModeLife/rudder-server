@@ -11,6 +11,22 @@ import (
 	"github.com/rudderlabs/rudder-server/enterprise/suppress-user/model"
 )
 
+const (
+	FilterEventCode   = 298
+	SuppressEventCode = 299
+)
+
+func GetFallBackErrorMessage(code int) string {
+	switch code {
+	case FilterEventCode:
+		return "Event filtered"
+	case SuppressEventCode:
+		return "Event handled by transformer"
+	}
+
+	return ""
+}
+
 // SingularEventT single event structrue
 type SingularEventT map[string]interface{}
 

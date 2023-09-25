@@ -10,7 +10,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	transformationdebugger "github.com/rudderlabs/rudder-server/services/debugger/transformation"
 
@@ -35,7 +38,6 @@ import (
 	mockDedup "github.com/rudderlabs/rudder-server/mocks/services/dedup"
 	mockReportingTypes "github.com/rudderlabs/rudder-server/mocks/utils/types"
 	"github.com/rudderlabs/rudder-server/processor/isolation"
-	"github.com/rudderlabs/rudder-server/processor/stash"
 	"github.com/rudderlabs/rudder-server/processor/transformer"
 	"github.com/rudderlabs/rudder-server/services/fileuploader"
 	"github.com/rudderlabs/rudder-server/services/rsources"
@@ -456,7 +458,6 @@ var sampleBackendConfig = backendconfig.ConfigT{
 func initProcessor() {
 	config.Reset()
 	logger.Reset()
-	stash.Init()
 	admin.Init()
 	misc.Init()
 	format.MaxLength = 100000
@@ -676,7 +677,7 @@ var _ = Describe("Processor with ArchivalV2 enabled", Ordered, func() {
 	prepareHandle := func(proc *Handle) *Handle {
 		proc.config.transformerURL = transformerServer.URL
 		proc.archivalDB = c.mockArchivalDB
-		proc.config.archivalEnabled = true
+		proc.config.archivalEnabled = misc.SingleValueLoader(true)
 		isolationStrategy, err := isolation.GetStrategy(isolation.ModeNone)
 		Expect(err).To(BeNil())
 		proc.isolationStrategy = isolationStrategy
@@ -1129,9 +1130,9 @@ var _ = Describe("Processor", Ordered, func() {
 				gomock.Any(),
 				jobsdb.GetQueryParams{
 					CustomValFilters: gatewayCustomVal,
-					JobsLimit:        processor.config.maxEventsToProcess,
-					EventsLimit:      processor.config.maxEventsToProcess,
-					PayloadSizeLimit: processor.payloadLimit,
+					JobsLimit:        processor.config.maxEventsToProcess.Load(),
+					EventsLimit:      processor.config.maxEventsToProcess.Load(),
+					PayloadSizeLimit: processor.payloadLimit.Load(),
 				}).Return(jobsdb.JobsResult{Jobs: emptyJobsList}, nil).Times(1)
 
 			didWork := processor.handlePendingGatewayJobs("")
@@ -1272,9 +1273,9 @@ var _ = Describe("Processor", Ordered, func() {
 				gomock.Any(),
 				jobsdb.GetQueryParams{
 					CustomValFilters: gatewayCustomVal,
-					JobsLimit:        processor.config.maxEventsToProcess,
-					EventsLimit:      processor.config.maxEventsToProcess,
-					PayloadSizeLimit: processor.payloadLimit,
+					JobsLimit:        processor.config.maxEventsToProcess.Load(),
+					EventsLimit:      processor.config.maxEventsToProcess.Load(),
+					PayloadSizeLimit: processor.payloadLimit.Load(),
 				}).Return(jobsdb.JobsResult{Jobs: unprocessedJobsList}, nil).Times(1)
 
 			transformExpectations := map[string]transformExpectation{
@@ -1321,7 +1322,7 @@ var _ = Describe("Processor", Ordered, func() {
 					}
 				})
 
-			c.MockRsourcesService.EXPECT().IncrementStats(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(1).Return(nil)
+			c.MockRsourcesService.EXPECT().IncrementStats(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(2).Return(nil) // one for newly stored jobs and one for dropped jobs
 			c.mockArchivalDB.EXPECT().
 				WithStoreSafeTx(
 					gomock.Any(),
@@ -1479,9 +1480,9 @@ var _ = Describe("Processor", Ordered, func() {
 
 			callUnprocessed := c.mockGatewayJobsDB.EXPECT().GetUnprocessed(gomock.Any(), jobsdb.GetQueryParams{
 				CustomValFilters: gatewayCustomVal,
-				JobsLimit:        processor.config.maxEventsToProcess,
-				EventsLimit:      processor.config.maxEventsToProcess,
-				PayloadSizeLimit: processor.payloadLimit,
+				JobsLimit:        processor.config.maxEventsToProcess.Load(),
+				EventsLimit:      processor.config.maxEventsToProcess.Load(),
+				PayloadSizeLimit: processor.payloadLimit.Load(),
 			}).Return(jobsdb.JobsResult{Jobs: unprocessedJobsList}, nil).Times(1)
 
 			transformExpectations := map[string]transformExpectation{
@@ -1767,9 +1768,9 @@ var _ = Describe("Processor", Ordered, func() {
 
 			c.mockGatewayJobsDB.EXPECT().GetUnprocessed(gomock.Any(), jobsdb.GetQueryParams{
 				CustomValFilters: gatewayCustomVal,
-				JobsLimit:        processor.config.maxEventsToProcess,
-				EventsLimit:      processor.config.maxEventsToProcess,
-				PayloadSizeLimit: processor.payloadLimit,
+				JobsLimit:        processor.config.maxEventsToProcess.Load(),
+				EventsLimit:      processor.config.maxEventsToProcess.Load(),
+				PayloadSizeLimit: processor.payloadLimit.Load(),
 			}).Return(jobsdb.JobsResult{Jobs: unprocessedJobsList}, nil).Times(1)
 			// Test transformer failure
 			mockTransformer.EXPECT().Transform(gomock.Any(), gomock.Any(), gomock.Any()).Times(1).
@@ -1794,11 +1795,6 @@ var _ = Describe("Processor", Ordered, func() {
 			c.mockArchivalDB.EXPECT().
 				StoreInTx(gomock.Any(), gomock.Any(), gomock.Any()).
 				AnyTimes()
-
-			// will be used to save failed events to failed keys table
-			c.mockWriteProcErrorsDB.EXPECT().WithTx(gomock.Any()).Do(func(f func(tx *jobsdb.Tx) error) {
-				_ = f(&jobsdb.Tx{})
-			}).Times(1)
 
 			// One Store call is expected for all events
 			c.mockWriteProcErrorsDB.EXPECT().Store(gomock.Any(), gomock.Any()).Times(1).
@@ -1909,9 +1905,9 @@ var _ = Describe("Processor", Ordered, func() {
 
 			c.mockGatewayJobsDB.EXPECT().GetUnprocessed(gomock.Any(), jobsdb.GetQueryParams{
 				CustomValFilters: gatewayCustomVal,
-				JobsLimit:        processor.config.maxEventsToProcess,
-				EventsLimit:      processor.config.maxEventsToProcess,
-				PayloadSizeLimit: processor.payloadLimit,
+				JobsLimit:        processor.config.maxEventsToProcess.Load(),
+				EventsLimit:      processor.config.maxEventsToProcess.Load(),
+				PayloadSizeLimit: processor.payloadLimit.Load(),
 			}).Return(jobsdb.JobsResult{Jobs: unprocessedJobsList}, nil).Times(1)
 
 			// Test transformer failure
@@ -1937,10 +1933,6 @@ var _ = Describe("Processor", Ordered, func() {
 					// job should be marked as successful regardless of transformer response
 					assertJobStatus(unprocessedJobsList[0], statuses[0], jobsdb.Succeeded.State)
 				})
-
-			c.mockWriteProcErrorsDB.EXPECT().WithTx(gomock.Any()).Do(func(f func(tx *jobsdb.Tx) error) {
-				_ = f(&jobsdb.Tx{})
-			}).Return(nil).Times(1)
 
 			// One Store call is expected for all events
 			c.mockWriteProcErrorsDB.EXPECT().Store(gomock.Any(), gomock.Any()).Times(1).
@@ -2000,9 +1992,9 @@ var _ = Describe("Processor", Ordered, func() {
 
 			c.mockGatewayJobsDB.EXPECT().GetUnprocessed(gomock.Any(), jobsdb.GetQueryParams{
 				CustomValFilters: gatewayCustomVal,
-				JobsLimit:        processor.config.maxEventsToProcess,
-				EventsLimit:      processor.config.maxEventsToProcess,
-				PayloadSizeLimit: processor.payloadLimit,
+				JobsLimit:        processor.config.maxEventsToProcess.Load(),
+				EventsLimit:      processor.config.maxEventsToProcess.Load(),
+				PayloadSizeLimit: processor.payloadLimit.Load(),
 			}).Return(jobsdb.JobsResult{Jobs: unprocessedJobsList}, nil).Times(1)
 
 			// Test transformer failure
@@ -2122,7 +2114,7 @@ var _ = Describe("Processor", Ordered, func() {
 			defer processor.Shutdown()
 			c.MockReportingI.EXPECT().WaitForSetup(gomock.Any(), gomock.Any()).Times(1)
 
-			processor.config.readLoopSleep = time.Millisecond
+			processor.config.readLoopSleep = misc.SingleValueLoader(time.Millisecond)
 
 			c.mockReadProcErrorsDB.EXPECT().FailExecuting()
 			c.mockReadProcErrorsDB.EXPECT().GetJobs(gomock.Any(), []string{jobsdb.Failed.State, jobsdb.Unprocessed.State}, gomock.Any()).AnyTimes()
@@ -2137,6 +2129,7 @@ var _ = Describe("Processor", Ordered, func() {
 			Expect(processor.Start(ctx)).To(BeNil())
 		})
 	})
+
 	Context("isDestinationEnabled", func() {
 		It("should filter based on consent management preferences", func() {
 			event := types.SingularEventT{
@@ -2187,6 +2180,89 @@ var _ = Describe("Processor", Ordered, func() {
 				)),
 			).To(Equal(3)) // all except dest-1
 			Expect(processor.isDestinationAvailable(event, SourceID3)).To(BeTrue())
+		})
+	})
+
+	Context("getNonSuccessfulMetrics", func() {
+		It("getNonSuccessfulMetrics", func() {
+			event1 := types.SingularEventT{
+				"event":     "Demo Track1",
+				"messageId": "msg1",
+			}
+			event2 := types.SingularEventT{
+				"event":     "Demo Track2",
+				"messageId": "msg2",
+			}
+			event3 := types.SingularEventT{
+				"event":     "Demo Track3",
+				"messageId": "msg3",
+			}
+
+			c.mockGatewayJobsDB.EXPECT().DeleteExecuting().Times(1)
+
+			mockTransformer := mocksTransformer.NewMockTransformer(c.mockCtrl)
+
+			processor := prepareHandle(NewHandle(mockTransformer))
+
+			Setup(processor, c, false, true)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			Expect(processor.config.asyncInit.WaitContext(ctx)).To(BeNil())
+
+			commonMetadata := transformer.Metadata{SourceID: SourceIDEnabled, DestinationID: DestinationIDEnabledA}
+			singularEventWithReceivedAt1 := types.SingularEventWithReceivedAt{
+				SingularEvent: event1,
+				ReceivedAt:    time.Now(),
+			}
+			singularEventWithReceivedAt2 := types.SingularEventWithReceivedAt{
+				SingularEvent: event2,
+				ReceivedAt:    time.Now(),
+			}
+			singularEventWithReceivedAt3 := types.SingularEventWithReceivedAt{
+				SingularEvent: event3,
+				ReceivedAt:    time.Now(),
+			}
+			eventsByMessageID := map[string]types.SingularEventWithReceivedAt{
+				"msg1": singularEventWithReceivedAt1,
+				"msg2": singularEventWithReceivedAt2,
+				"msg3": singularEventWithReceivedAt3,
+			}
+			metadata1 := commonMetadata
+			metadata1.MessageID = "msg1"
+			metadata2 := commonMetadata
+			metadata2.MessageID = "msg2"
+			metadata3 := commonMetadata
+			metadata3.MessageID = "msg3"
+
+			FailedEvents := []transformer.TransformerResponse{
+				{StatusCode: 400, Metadata: metadata1, Output: event1},
+				{StatusCode: 298, Metadata: metadata2, Output: event2},
+				{StatusCode: 299, Metadata: metadata3, Output: event2},
+			}
+
+			transformerResponse := transformer.Response{
+				Events:       []transformer.TransformerResponse{},
+				FailedEvents: FailedEvents,
+			}
+
+			m := processor.getNonSuccessfulMetrics(transformerResponse,
+				&commonMetadata,
+				eventsByMessageID,
+				transformer.DestTransformerStage,
+				false,
+				false)
+
+			key := fmt.Sprintf("%s!<<#>>!%s!<<#>>!%s!<<#>>!%s!<<#>>!%s", commonMetadata.SourceID, commonMetadata.DestinationID, commonMetadata.SourceJobRunID, commonMetadata.EventName, commonMetadata.EventType)
+
+			Expect(len(m.failedJobs)).To(Equal(2))
+			Expect(len(m.failedMetrics)).To(Equal(2))
+			Expect(m.failedMetrics[0].StatusDetail.StatusCode).To(Equal(400))
+			Expect(m.failedMetrics[1].StatusDetail.StatusCode).To(Equal(299))
+			Expect(int(m.failedCountMap[key])).To(Equal(2))
+
+			Expect(len(m.filteredJobs)).To(Equal(1))
+			Expect(len(m.filteredMetrics)).To(Equal(1))
+			Expect(int(m.filteredCountMap[key])).To(Equal(1))
 		})
 	})
 })
@@ -2248,7 +2324,7 @@ var _ = Describe("Static Function Tests", func() {
 
 	Context("getDiffMetrics Tests", func() {
 		It("Should match diffMetrics response for Empty Inputs", func() {
-			response := getDiffMetrics("some-string-1", "some-string-2", map[string]MetricMetadata{}, map[string]int64{}, map[string]int64{}, map[string]int64{})
+			response := getDiffMetrics("some-string-1", "some-string-2", map[string]MetricMetadata{}, map[string]int64{}, map[string]int64{}, map[string]int64{}, map[string]int64{})
 			Expect(len(response)).To(Equal(0))
 		})
 
@@ -2282,6 +2358,10 @@ var _ = Describe("Static Function Tests", func() {
 				"some-key-1": 1,
 				"some-key-2": 2,
 			}
+			filteredCountMap := map[string]int64{
+				"some-key-1": 2,
+				"some-key-2": 3,
+			}
 
 			expectedResponse := []*types.PUReportedMetric{
 				{
@@ -2300,7 +2380,7 @@ var _ = Describe("Static Function Tests", func() {
 					},
 					StatusDetail: &types.StatusDetail{
 						Status:         "diff",
-						Count:          3,
+						Count:          5,
 						StatusCode:     0,
 						SampleResponse: "",
 						SampleEvent:    []byte(`{}`),
@@ -2322,7 +2402,7 @@ var _ = Describe("Static Function Tests", func() {
 					},
 					StatusDetail: &types.StatusDetail{
 						Status:         "diff",
-						Count:          4,
+						Count:          7,
 						StatusCode:     0,
 						SampleResponse: "",
 						SampleEvent:    []byte(`{}`),
@@ -2330,7 +2410,7 @@ var _ = Describe("Static Function Tests", func() {
 				},
 			}
 
-			response := getDiffMetrics("some-string-1", "some-string-2", inCountMetadataMap, inCountMap, successCountMap, failedCountMap)
+			response := getDiffMetrics("some-string-1", "some-string-2", inCountMetadataMap, inCountMap, successCountMap, failedCountMap, filteredCountMap)
 			assertReportMetric(expectedResponse, response)
 		})
 	})
@@ -2471,6 +2551,12 @@ var _ = Describe("Static Function Tests", func() {
 				},
 				FailedEvents: []transformer.TransformerResponse{
 					{
+						Output:     events[1].Message,
+						StatusCode: 298,
+						Metadata:   events[1].Metadata,
+						Error:      "Message type not supported",
+					},
+					{
 						Output:     events[2].Message,
 						StatusCode: 400,
 						Metadata:   events[2].Metadata,
@@ -2537,6 +2623,12 @@ var _ = Describe("Static Function Tests", func() {
 					},
 				},
 				FailedEvents: []transformer.TransformerResponse{
+					{
+						Output:     events[0].Message,
+						StatusCode: 298,
+						Metadata:   events[0].Metadata,
+						Error:      "Message type not supported",
+					},
 					{
 						Output:     events[2].Message,
 						StatusCode: 400,
@@ -2730,6 +2822,12 @@ var _ = Describe("Static Function Tests", func() {
 				},
 				FailedEvents: []transformer.TransformerResponse{
 					{
+						Output:     events[0].Message,
+						StatusCode: 298,
+						Metadata:   events[0].Metadata,
+						Error:      "Event not supported",
+					},
+					{
 						Output:     events[2].Message,
 						StatusCode: 400,
 						Metadata:   events[2].Metadata,
@@ -2887,13 +2985,21 @@ var _ = Describe("Static Function Tests", func() {
 						StatusCode: 200,
 						Metadata:   events[0].Metadata,
 					},
-					// {
-					// 	Output:     events[1].Message,
-					// 	StatusCode: 200,
-					// 	Metadata:   events[1].Metadata,
-					// },
 				},
-				FailedEvents: nil,
+				FailedEvents: []transformer.TransformerResponse{
+					{
+						Output:     events[1].Message,
+						StatusCode: 298,
+						Metadata:   events[1].Metadata,
+						Error:      "Message type not supported",
+					},
+					{
+						Output:     events[2].Message,
+						StatusCode: 298,
+						Metadata:   events[2].Metadata,
+						Error:      "Message type not supported",
+					},
+				},
 			}
 			response := ConvertToFilteredTransformerResponse(events, true)
 			Expect(response).To(Equal(expectedResponse))
@@ -2969,8 +3075,27 @@ var _ = Describe("Static Function Tests", func() {
 				},
 			}
 			expectedResponse := transformer.Response{
-				Events:       nil,
-				FailedEvents: nil,
+				Events: nil,
+				FailedEvents: []transformer.TransformerResponse{
+					{
+						Output:     events[0].Message,
+						StatusCode: 298,
+						Metadata:   events[0].Metadata,
+						Error:      "Filtering event based on hybridModeFilter",
+					},
+					{
+						Output:     events[1].Message,
+						StatusCode: 298,
+						Metadata:   events[1].Metadata,
+						Error:      "Filtering event based on hybridModeFilter",
+					},
+					{
+						Output:     events[2].Message,
+						StatusCode: 298,
+						Metadata:   events[2].Metadata,
+						Error:      "Message type not supported",
+					},
+				},
 			}
 			response := ConvertToFilteredTransformerResponse(events, true)
 			Expect(response).To(Equal(expectedResponse))
@@ -3058,7 +3183,14 @@ var _ = Describe("Static Function Tests", func() {
 						Metadata:   events[1].Metadata,
 					},
 				},
-				FailedEvents: nil,
+				FailedEvents: []transformer.TransformerResponse{
+					{
+						Output:     events[2].Message,
+						StatusCode: 298,
+						Metadata:   events[2].Metadata,
+						Error:      "Message type not supported",
+					},
+				},
 			}
 			response := ConvertToFilteredTransformerResponse(events, true)
 			Expect(response).To(Equal(expectedResponse))
@@ -3141,7 +3273,14 @@ var _ = Describe("Static Function Tests", func() {
 						Metadata:   events[1].Metadata,
 					},
 				},
-				FailedEvents: nil,
+				FailedEvents: []transformer.TransformerResponse{
+					{
+						Output:     events[2].Message,
+						StatusCode: 298,
+						Metadata:   events[2].Metadata,
+						Error:      "Message type not supported",
+					},
+				},
 			}
 			response := ConvertToFilteredTransformerResponse(events, true)
 			Expect(response).To(Equal(expectedResponse))
@@ -3227,7 +3366,14 @@ var _ = Describe("Static Function Tests", func() {
 						Metadata:   events[1].Metadata,
 					},
 				},
-				FailedEvents: nil,
+				FailedEvents: []transformer.TransformerResponse{
+					{
+						Output:     events[2].Message,
+						StatusCode: 298,
+						Metadata:   events[2].Metadata,
+						Error:      "Message type not supported",
+					},
+				},
 			}
 			response := ConvertToFilteredTransformerResponse(events, true)
 			Expect(response).To(Equal(expectedResponse))
@@ -3316,7 +3462,14 @@ var _ = Describe("Static Function Tests", func() {
 						Metadata:   events[1].Metadata,
 					},
 				},
-				FailedEvents: nil,
+				FailedEvents: []transformer.TransformerResponse{
+					{
+						Output:     events[2].Message,
+						StatusCode: 298,
+						Metadata:   events[2].Metadata,
+						Error:      "Message type not supported",
+					},
+				},
 			}
 			response := ConvertToFilteredTransformerResponse(events, true)
 			Expect(response).To(Equal(expectedResponse))
@@ -3858,3 +4011,66 @@ var _ = Describe("TestConfigFilter", func() {
 		})
 	})
 })
+
+func TestStoreMessageMerge(t *testing.T) {
+	sm1 := &storeMessage{
+		statusList:    []*jobsdb.JobStatusT{{JobID: 1}},
+		destJobs:      []*jobsdb.JobT{{JobID: 1}},
+		batchDestJobs: []*jobsdb.JobT{{JobID: 1}},
+		procErrorJobsByDestID: map[string][]*jobsdb.JobT{
+			"1": {{JobID: 1}},
+		},
+		procErrorJobs:  []*jobsdb.JobT{{JobID: 1}},
+		routerDestIDs:  []string{"1"},
+		reportMetrics:  []*types.PUReportedMetric{{}},
+		sourceDupStats: map[dupStatKey]int{{sourceID: "1"}: 1},
+		dedupKeys:      map[string]struct{}{"1": {}},
+		totalEvents:    1,
+	}
+
+	sm2 := &storeMessage{
+		statusList:    []*jobsdb.JobStatusT{{JobID: 2}},
+		destJobs:      []*jobsdb.JobT{{JobID: 2}},
+		batchDestJobs: []*jobsdb.JobT{{JobID: 2}},
+		procErrorJobsByDestID: map[string][]*jobsdb.JobT{
+			"2": {{JobID: 2}},
+		},
+		procErrorJobs:  []*jobsdb.JobT{{JobID: 2}},
+		routerDestIDs:  []string{"2"},
+		reportMetrics:  []*types.PUReportedMetric{{}},
+		sourceDupStats: map[dupStatKey]int{{sourceID: "1"}: 2},
+		dedupKeys:      map[string]struct{}{"2": {}},
+		totalEvents:    1,
+	}
+
+	merged := storeMessage{
+		procErrorJobsByDestID: map[string][]*jobsdb.JobT{},
+		sourceDupStats:        map[dupStatKey]int{},
+		dedupKeys:             map[string]struct{}{},
+	}
+
+	merged.merge(sm1)
+	require.Len(t, merged.statusList, 1, "status list should have 1 element")
+	require.Len(t, merged.destJobs, 1, "dest jobs should have 1 element")
+	require.Len(t, merged.batchDestJobs, 1, "batch dest jobs should have 1 element")
+	require.Len(t, merged.procErrorJobsByDestID, 1, "proc error jobs by dest id should have 1 element")
+	require.Len(t, merged.procErrorJobs, 1, "proc error jobs should have 1 element")
+	require.Len(t, merged.routerDestIDs, 1, "router dest ids should have 1 element")
+	require.Len(t, merged.reportMetrics, 1, "report metrics should have 1 element")
+	require.Len(t, merged.sourceDupStats, 1, "source dup stats should have 1 element")
+	require.Len(t, merged.dedupKeys, 1, "dedup keys should have 1 element")
+	require.Equal(t, merged.totalEvents, 1, "total events should be 1")
+
+	merged.merge(sm2)
+	require.Len(t, merged.statusList, 2, "status list should have 2 elements")
+	require.Len(t, merged.destJobs, 2, "dest jobs should have 2 elements")
+	require.Len(t, merged.batchDestJobs, 2, "batch dest jobs should have 2 elements")
+	require.Len(t, merged.procErrorJobsByDestID, 2, "proc error jobs by dest id should have 2 elements")
+	require.Len(t, merged.procErrorJobs, 2, "proc error jobs should have 2 elements")
+	require.Len(t, merged.routerDestIDs, 2, "router dest ids should have 2 elements")
+	require.Len(t, merged.reportMetrics, 2, "report metrics should have 2 elements")
+	require.Len(t, merged.sourceDupStats, 1, "source dup stats should have 1 element")
+	require.EqualValues(t, merged.sourceDupStats[dupStatKey{sourceID: "1"}], 3)
+	require.Len(t, merged.dedupKeys, 2, "dedup keys should have 2 elements")
+	require.Equal(t, merged.totalEvents, 2, "total events should be 2")
+}

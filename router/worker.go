@@ -28,6 +28,7 @@ import (
 	destinationdebugger "github.com/rudderlabs/rudder-server/services/debugger/destination"
 	"github.com/rudderlabs/rudder-server/services/oauth"
 	"github.com/rudderlabs/rudder-server/utils/misc"
+	utilTypes "github.com/rudderlabs/rudder-server/utils/types"
 )
 
 // worker a structure to define a worker for sending events to sinks
@@ -553,12 +554,12 @@ func (w *worker) processDestinationJobs() {
 				}
 				errorAt = routerutils.ERROR_AT_TF
 			}
-		} else if destinationJob.StatusCode == 298 {
+		} else if destinationJob.StatusCode == utilTypes.FilterEventCode || destinationJob.StatusCode == utilTypes.SuppressEventCode {
 			respStatusCode = destinationJob.StatusCode
-			respBody = "filtering this event"
-		} else if destinationJob.StatusCode == 299 {
-			respStatusCode = destinationJob.DestResp.StatusCode
-			respBody = destinationJob.DestResp.Resp
+			respBody = destinationJob.Error
+			if respBody == "" {
+				respBody = utilTypes.GetFallBackErrorMessage(respStatusCode)
+			}
 		} else {
 			respStatusCode = destinationJob.StatusCode
 			respBody = destinationJob.Error
@@ -767,7 +768,7 @@ func (w *worker) postStatusOnResponseQ(respStatusCode int, payload json.RawMessa
 
 	if isSuccessStatus(respStatusCode) {
 		status.JobState = jobsdb.Succeeded.State
-		if respStatusCode == 298 {
+		if respStatusCode == utilTypes.FilterEventCode {
 			status.JobState = jobsdb.Filtered.State
 		}
 		w.logger.Debugf("sending success status to response")
@@ -815,7 +816,7 @@ func (w *worker) sendRouterResponseCountStat(status *jobsdb.JobStatusT, destinat
 	destinationTag := misc.GetTagName(destination.ID, destination.Name)
 	var alert bool
 	alert = w.allowRouterAbortedAlert(errorAt)
-	if status.JobState == jobsdb.Succeeded.State {
+	if status.JobState == jobsdb.Succeeded.State || status.JobState == jobsdb.Filtered.State {
 		alert = !w.rt.reloadableConfig.skipRtAbortAlertForTransformation.Load() || !w.rt.reloadableConfig.skipRtAbortAlertForDelivery.Load()
 		errorAt = ""
 	}
