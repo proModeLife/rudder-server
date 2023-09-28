@@ -29,7 +29,6 @@ import (
 	"github.com/rudderlabs/rudder-go-kit/stats/metric"
 	kitsync "github.com/rudderlabs/rudder-go-kit/sync"
 	backendconfig "github.com/rudderlabs/rudder-server/backend-config"
-	eventschema "github.com/rudderlabs/rudder-server/event-schema"
 	"github.com/rudderlabs/rudder-server/jobsdb"
 	"github.com/rudderlabs/rudder-server/processor/eventfilter"
 	"github.com/rudderlabs/rudder-server/processor/integrations"
@@ -81,7 +80,6 @@ type Handle struct {
 	archivalDB    jobsdb.JobsDB
 
 	logger                    logger.Logger
-	eventSchemaHandler        types.EventSchemasI
 	dedup                     dedup.Dedup
 	reporting                 types.Reporting
 	reportingEnabled          bool
@@ -107,39 +105,37 @@ type Handle struct {
 		store      kitsync.Limiter
 	}
 	config struct {
-		isolationMode             isolation.Mode
-		mainLoopTimeout           time.Duration
-		featuresRetryMaxAttempts  int
-		enablePipelining          bool
-		pipelineBufferedItems     int
-		subJobSize                int
-		pingerSleep               misc.ValueLoader[time.Duration]
-		readLoopSleep             misc.ValueLoader[time.Duration]
-		maxLoopSleep              misc.ValueLoader[time.Duration]
-		storeTimeout              misc.ValueLoader[time.Duration]
-		maxEventsToProcess        misc.ValueLoader[int]
-		transformBatchSize        misc.ValueLoader[int]
-		userTransformBatchSize    misc.ValueLoader[int]
-		sourceIdDestinationMap    map[string][]backendconfig.DestinationT
-		sourceIdSourceMap         map[string]backendconfig.SourceT
-		workspaceLibrariesMap     map[string]backendconfig.LibrariesT
-		destinationIDtoTypeMap    map[string]string
-		destConsentCategories     map[string][]string
-		batchDestinations         []string
-		configSubscriberLock      sync.RWMutex
-		enableEventSchemasFeature bool
-		enableEventSchemasAPIOnly misc.ValueLoader[bool]
-		enableDedup               bool
-		enableEventCount          misc.ValueLoader[bool]
-		transformTimesPQLength    int
-		captureEventNameStats     misc.ValueLoader[bool]
-		transformerURL            string
-		pollInterval              time.Duration
-		GWCustomVal               string
-		asyncInit                 *misc.AsyncInit
-		eventSchemaV2Enabled      bool
-		archivalEnabled           misc.ValueLoader[bool]
-		eventAuditEnabled         map[string]bool
+		isolationMode            isolation.Mode
+		mainLoopTimeout          time.Duration
+		featuresRetryMaxAttempts int
+		enablePipelining         bool
+		pipelineBufferedItems    int
+		subJobSize               int
+		pingerSleep              misc.ValueLoader[time.Duration]
+		readLoopSleep            misc.ValueLoader[time.Duration]
+		maxLoopSleep             misc.ValueLoader[time.Duration]
+		storeTimeout             misc.ValueLoader[time.Duration]
+		maxEventsToProcess       misc.ValueLoader[int]
+		transformBatchSize       misc.ValueLoader[int]
+		userTransformBatchSize   misc.ValueLoader[int]
+		sourceIdDestinationMap   map[string][]backendconfig.DestinationT
+		sourceIdSourceMap        map[string]backendconfig.SourceT
+		workspaceLibrariesMap    map[string]backendconfig.LibrariesT
+		destinationIDtoTypeMap   map[string]string
+		destConsentCategories    map[string][]string
+		batchDestinations        []string
+		configSubscriberLock     sync.RWMutex
+		enableDedup              bool
+		enableEventCount         misc.ValueLoader[bool]
+		transformTimesPQLength   int
+		captureEventNameStats    misc.ValueLoader[bool]
+		transformerURL           string
+		pollInterval             time.Duration
+		GWCustomVal              string
+		asyncInit                *misc.AsyncInit
+		eventSchemaV2Enabled     bool
+		archivalEnabled          misc.ValueLoader[bool]
+		eventAuditEnabled        map[string]bool
 	}
 
 	adaptiveLimit func(int64) int64
@@ -154,7 +150,6 @@ type processorStats struct {
 	statDBR                       stats.Measurement
 	statDBW                       stats.Measurement
 	statLoopTime                  stats.Measurement
-	eventSchemasTime              stats.Measurement
 	validateEventsTime            stats.Measurement
 	processJobsTime               stats.Measurement
 	statSessionTransform          stats.Measurement
@@ -389,7 +384,6 @@ func (proc *Handle) Setup(
 	proc.stats.statProcErrDBW = proc.statsFactory.NewStat("processor.proc_err_db_write", stats.CountType)
 	proc.stats.statLoopTime = proc.statsFactory.NewStat("processor.loop_time", stats.TimerType)
 	proc.stats.statMarkExecuting = proc.statsFactory.NewStat("processor.mark_executing", stats.TimerType)
-	proc.stats.eventSchemasTime = proc.statsFactory.NewStat("processor.event_schemas_time", stats.TimerType)
 	proc.stats.validateEventsTime = proc.statsFactory.NewStat("processor.validate_events_time", stats.TimerType)
 	proc.stats.processJobsTime = proc.statsFactory.NewStat("processor.process_jobs_time", stats.TimerType)
 	proc.stats.statSessionTransform = proc.statsFactory.NewStat("processor.session_transform_time", stats.TimerType)
@@ -434,9 +428,6 @@ func (proc *Handle) Setup(
 	proc.stats.processJobThroughput = proc.statsFactory.NewStat("processor.processJob_thoughput", stats.CountType)
 	proc.stats.transformationsThroughput = proc.statsFactory.NewStat("processor.transformations_throughput", stats.CountType)
 	proc.stats.DBWriteThroughput = proc.statsFactory.NewStat("processor.db_write_throughput", stats.CountType)
-	if proc.config.enableEventSchemasFeature {
-		proc.eventSchemaHandler = eventschema.GetInstance()
-	}
 	if proc.config.enableDedup {
 		proc.dedup = dedup.New(dedup.DefaultPath())
 	}
@@ -605,8 +596,6 @@ func (proc *Handle) loadConfig() {
 	proc.config.subJobSize = config.GetIntVar(defaultSubJobSize, 1, "Processor.subJobSize")
 	// Enable dedup of incoming events by default
 	proc.config.enableDedup = config.GetBoolVar(false, "Dedup.enableDedup")
-	// EventSchemas feature. false by default
-	proc.config.enableEventSchemasFeature = config.GetBoolVar(false, "EventSchemas.enableEventSchemasFeature")
 	proc.config.eventSchemaV2Enabled = config.GetBoolVar(false, "EventSchemas2.enabled")
 	proc.config.batchDestinations = misc.BatchDestinations()
 	proc.config.transformTimesPQLength = config.GetIntVar(5, 1, "Processor.transformTimesPQLength")
@@ -627,7 +616,6 @@ func (proc *Handle) loadReloadableConfig(defaultPayloadLimit int64, defaultMaxEv
 	proc.config.transformBatchSize = config.GetReloadableIntVar(100, 1, "Processor.transformBatchSize")
 	proc.config.userTransformBatchSize = config.GetReloadableIntVar(200, 1, "Processor.userTransformBatchSize")
 	proc.config.enableEventCount = config.GetReloadableBoolVar(true, "Processor.enableEventCount")
-	proc.config.enableEventSchemasAPIOnly = config.GetReloadableBoolVar(false, "EventSchemas.enableEventSchemasAPIOnly")
 	proc.config.maxEventsToProcess = config.GetReloadableIntVar(defaultMaxEventsToProcess, 1, "Processor.maxLoopProcessEvents")
 	proc.config.archivalEnabled = config.GetReloadableBoolVar(true, "archival.Enabled")
 	// Capture event name as a tag in event level stats
@@ -2701,16 +2689,6 @@ func (proc *Handle) getJobs(partition string) jobsdb.JobsResult {
 		proc.logger.Debugf("Processor DB Read Complete. No GW Jobs to process.")
 		return unprocessedList
 	}
-
-	eventSchemasStart := time.Now()
-	if proc.config.enableEventSchemasFeature && !proc.config.enableEventSchemasAPIOnly.Load() {
-		for _, unprocessedJob := range unprocessedList.Jobs {
-			writeKey := gjson.GetBytes(unprocessedJob.EventPayload, "writeKey").Str
-			proc.eventSchemaHandler.RecordEventSchema(writeKey, string(unprocessedJob.EventPayload))
-		}
-	}
-	eventSchemasTime := time.Since(eventSchemasStart)
-	defer proc.stats.eventSchemasTime.SendTiming(eventSchemasTime)
 
 	proc.logger.Debugf("Processor DB Read Complete. unprocessedList: %v total_events: %d", len(unprocessedList.Jobs), unprocessedList.EventsCount)
 	proc.stats.statGatewayDBR.Count(len(unprocessedList.Jobs))
