@@ -18,15 +18,6 @@ const (
 	/*TopicProcessConfig topic provides updates on backend config of processor enabled destinations, via Subscribe function */
 	TopicProcessConfig Topic = "processConfig"
 
-	/*RegulationSuppress refers to Suppress Regulation */
-	RegulationSuppress Regulation = "Suppress"
-
-	/*RegulationDelete refers to Suppress and Delete Regulation */
-	RegulationDelete Regulation = "Delete" // TODO Will add support soon.
-
-	/*RegulationSuppressAndDelete refers to Suppress and Delete Regulation */
-	RegulationSuppressAndDelete Regulation = "Suppress_With_Delete"
-
 	GlobalEventType = "global"
 )
 

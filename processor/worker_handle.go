@@ -14,10 +14,10 @@ type workerHandle interface {
 	logger() logger.Logger
 	config() workerHandleConfig
 	rsourcesService() rsources.JobService
-	handlePendingGatewayJobs(key string) bool
 	stats() *processorStats
 
 	getJobs(partition string) jobsdb.JobsResult
+	handlePendingGatewayJobs(key string) bool
 	markExecuting(jobs []*jobsdb.JobT) error
 	jobSplitter(jobs []*jobsdb.JobT, rsourcesStats rsources.StatsCollector) []subJob
 	processJobsForDest(partition string, subJobs subJob) *transformationMessage

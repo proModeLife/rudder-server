@@ -1,6 +1,7 @@
 package eventfilter
 
 import (
+	"github.com/samber/lo"
 	"strings"
 
 	"golang.org/x/exp/slices"
@@ -55,14 +56,6 @@ func identifyDisabled(destination *backendconfig.DestinationT) bool {
 // GetSupportedEvents returns the supported message events for the given destination, based on configuration.
 // If no relevant configuration is found, returns false
 func GetSupportedMessageEvents(destination *backendconfig.DestinationT) ([]string, bool) {
-	// "listOfConversions": [
-	//  	{
-	//  		"conversions": "Credit Card Added"
-	//  	},
-	//  	{
-	//  		"conversions": "Credit Card Removed"
-	//	    }
-	// ]
 	if supportedEventsI, ok := destination.Config["listOfConversions"]; ok {
 		if supportedEvents, ok := supportedEventsI.([]interface{}); ok {
 			var supportedMessageEvents []string
@@ -84,30 +77,25 @@ func GetSupportedMessageEvents(destination *backendconfig.DestinationT) ([]strin
 	return nil, false
 }
 
-type AllowTransformerEventParams struct {
-	TransformerEvent      *transformer.TransformerEvent
-	SupportedMessageTypes []string
-}
-
-type EventParams struct {
+type eventParams struct {
 	MessageType string
 }
 
-type ConnectionModeFilterParams struct {
+type connectionModeFilterParams struct {
 	Destination      *backendconfig.DestinationT
 	SrcType          string
-	Event            *EventParams
+	Event            *eventParams
 	DefaultBehaviour bool
 }
 
-func getMessageType(event *types.SingularEventT) string {
+func messageType(event *types.SingularEventT) string {
 	eventMessageTypeI := misc.MapLookup(*event, "type")
 	if eventMessageTypeI == nil {
 		pkgLogger.Error("Message type is not being sent for the event")
 		return ""
 	}
-	eventMessageType, isEventTypeString := eventMessageTypeI.(string)
-	if !isEventTypeString {
+	eventMessageType, ok := eventMessageTypeI.(string)
+	if !ok {
 		pkgLogger.Errorf("Invalid message type: type assertion failed: %v", eventMessageTypeI)
 		return ""
 	}
@@ -123,11 +111,15 @@ Currently this method supports below validations(executed in the same order):
 
 2. Validate if the event is sendable to destination based on connectionMode, sourceType & messageType
 */
-func AllowEventToDestTransformation(transformerEvent *transformer.TransformerEvent, supportedMsgTypes []string) (bool, *transformer.TransformerResponse) {
-	// MessageType filtering -- STARTS
-	messageType := strings.TrimSpace(strings.ToLower(getMessageType(&transformerEvent.Message)))
+func AllowEventToDestTransformation(
+	transformerEvent *transformer.TransformerEvent,
+	supportedMsgTypes []string,
+) (
+	bool,
+	*transformer.TransformerResponse,
+) {
+	messageType := strings.TrimSpace(strings.ToLower(messageType(&transformerEvent.Message)))
 	if messageType == "" {
-		// We will abort the event
 		return false, &transformer.TransformerResponse{
 			Output: transformerEvent.Message, StatusCode: 400,
 			Metadata: transformerEvent.Metadata,
@@ -150,10 +142,10 @@ func AllowEventToDestTransformation(transformerEvent *transformer.TransformerEve
 	// MessageType filtering -- ENDS
 
 	// hybridModeCloudEventsFilter.srcType.[eventProperty] filtering -- STARTS
-	allow := FilterEventsForHybridMode(ConnectionModeFilterParams{
+	allow := filterEventsForHybridMode(connectionModeFilterParams{
 		Destination: &transformerEvent.Destination,
 		SrcType:     transformerEvent.Metadata.SourceDefinitionType,
-		Event:       &EventParams{MessageType: messageType},
+		Event:       &eventParams{MessageType: messageType},
 		// Default behavior
 		// When something is missing in "supportedConnectionModes" or if "supportedConnectionModes" is not defined
 		// We would be checking for below things
@@ -201,63 +193,52 @@ Example:
 			...
 		}
 */
-func FilterEventsForHybridMode(connectionModeFilterParams ConnectionModeFilterParams) bool {
+func filterEventsForHybridMode(connectionModeFilterParams connectionModeFilterParams) (allow bool) {
 	destination := connectionModeFilterParams.Destination
 	srcType := strings.TrimSpace(connectionModeFilterParams.SrcType)
 	messageType := connectionModeFilterParams.Event.MessageType
-	evaluatedDefaultBehaviour := connectionModeFilterParams.DefaultBehaviour
+
+	allow = connectionModeFilterParams.DefaultBehaviour
 
 	if srcType == "" {
-		pkgLogger.Debug("sourceType is empty string, filtering event based on default behaviour")
-		return evaluatedDefaultBehaviour
+		return
 	}
 
 	destConnModeI := misc.MapLookup(destination.Config, "connectionMode")
 	if destConnModeI == nil {
-		pkgLogger.Debug("connectionMode not present, filtering event based on default behaviour")
-		return evaluatedDefaultBehaviour
+		return
 	}
-	destConnectionMode, isDestConnModeString := destConnModeI.(string)
-	if !isDestConnModeString || destConnectionMode != hybridMode {
-		pkgLogger.Debugf("Provided connectionMode(%v) is in wrong format or the mode is not %q, filtering event based on default behaviour", destConnModeI, hybridMode)
-		return evaluatedDefaultBehaviour
+
+	destConnectionMode, ok := destConnModeI.(string)
+	if !ok || destConnectionMode != hybridMode {
+		return
 	}
 
 	sourceEventPropertiesI := misc.MapLookup(destination.DestinationDefinition.Config, hybridModeEventsFilterKey, srcType)
 	if sourceEventPropertiesI == nil {
-		pkgLogger.Debugf("Destination definition config doesn't contain proper values for %[1]v or %[1]v.%[2]v", hybridModeEventsFilterKey, srcType)
-		return evaluatedDefaultBehaviour
-	}
-	eventProperties, isOk := sourceEventPropertiesI.(map[string]interface{})
-
-	if !isOk || len(eventProperties) == 0 {
-		pkgLogger.Debugf("'%v.%v' is not correctly defined", hybridModeEventsFilterKey, srcType)
-		return evaluatedDefaultBehaviour
+		return
 	}
 
-	// Flag indicating to let the event pass through
-	allowEvent := evaluatedDefaultBehaviour
+	eventProperties, ok := sourceEventPropertiesI.(map[string]interface{})
+	if !ok || len(eventProperties) == 0 {
+		return
+	}
+
 	for eventProperty, supportedEventVals := range eventProperties {
-
-		if !allowEvent {
-			pkgLogger.Debugf("Previous evaluation of allowAll is false or type assertion failed for an event property(%v), filtering event based on default behaviour", eventProperty)
-			allowEvent = evaluatedDefaultBehaviour
-			break
+		if !allow {
+			return connectionModeFilterParams.DefaultBehaviour
 		}
+
 		if eventProperty == "messageType" {
-			messageTypes := ConvertToArrayOfType[string](supportedEventVals)
+			messageTypes := convertToArrayOfType[string](supportedEventVals)
 			if len(messageTypes) == 0 {
-				pkgLogger.Debug("Problem with message type event property map, filtering event based on default behaviour")
-				allowEvent = evaluatedDefaultBehaviour
-				continue
+				return connectionModeFilterParams.DefaultBehaviour
 			}
 
-			pkgLogger.Debugf("MessageTypes allowed: %v -- MessageType from event: %v\n", messageTypes, messageType)
-
-			allowEvent = slices.Contains(messageTypes, messageType) && evaluatedDefaultBehaviour
+			allow = slices.Contains(messageTypes, messageType) && connectionModeFilterParams.DefaultBehaviour
 		}
 	}
-	return allowEvent
+	return
 }
 
 type EventPropsTypes interface {
@@ -267,20 +248,15 @@ type EventPropsTypes interface {
 /*
 * Converts interface{} to []T if the go type-assertion allows it
  */
-func ConvertToArrayOfType[T EventPropsTypes](data interface{}) []T {
+func convertToArrayOfType[T EventPropsTypes](data interface{}) []T {
 	switch value := data.(type) {
 	case []T:
 		return value
 	case []interface{}:
-		result := make([]T, len(value))
-		for i, v := range value {
-			var ok bool
-			result[i], ok = v.(T)
-			if !ok {
-				return []T{}
-			}
-		}
-		return result
+		return lo.FilterMap(value, func(item interface{}, index int) (T, bool) {
+			val, ok := item.(T)
+			return val, ok
+		})
 	}
 	return []T{}
 }

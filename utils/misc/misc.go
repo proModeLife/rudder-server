@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/samber/lo"
 	"hash/fnv"
 	"io"
 	"net"
@@ -442,12 +443,10 @@ func MakeHTTPRequestWithTimeout(url string, payload io.Reader, timeout time.Dura
 }
 
 func ConvertInterfaceToStringArray(input []interface{}) []string {
-	output := make([]string, len(input))
-	for i, val := range input {
-		valString, _ := val.(string)
-		output[i] = valString
-	}
-	return output
+	return lo.FilterMap(input, func(item interface{}, _ int) (string, bool) {
+		itemVal, ok := item.(string)
+		return itemVal, ok
+	})
 }
 
 func HTTPCallWithRetryWithTimeout(url string, payload []byte, timeout time.Duration) ([]byte, int) {

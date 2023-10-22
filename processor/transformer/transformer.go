@@ -274,6 +274,7 @@ func (trans *handle) transform(
 
 	var trackWg sync.WaitGroup
 	defer trackWg.Wait()
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -306,11 +307,13 @@ func (trans *handle) transform(
 		func(batch []TransformerEvent, i int) {
 			trans.guardConcurrency <- struct{}{}
 			go func() {
+				defer func() {
+					<-trans.guardConcurrency
+					wg.Done()
+				}()
 				trace.WithRegion(ctx, "request", func() {
 					transformResponse[i] = trans.request(ctx, url, stage, batch)
 				})
-				<-trans.guardConcurrency
-				wg.Done()
 			}()
 		},
 	)
@@ -449,6 +452,10 @@ func (trans *handle) request(ctx context.Context, url, stage string, data []Tran
 	return transformerResponses
 }
 
+// 809 -> control plane down -> indefinitely retry
+// [200, 500} - {429, 408}-> N0 retry
+// {429, 408} -> Retry with backoff
+// any other error -> panic
 func (trans *handle) doPost(ctx context.Context, rawJSON []byte, url, stage string, tags stats.Tags) ([]byte, int) {
 	var (
 		retryCount int
@@ -526,9 +533,6 @@ func (trans *handle) destTransformURL(destType string) string {
 
 	if _, ok := warehouseutils.WarehouseDestinationMap[destType]; ok {
 		whSchemaVersionQueryParam := fmt.Sprintf("whSchemaVersion=%s&whIDResolve=%v", trans.conf.GetString("Warehouse.schemaVersion", "v1"), warehouseutils.IDResolutionEnabled())
-		if destType == warehouseutils.RS {
-			return destinationEndPoint + "?" + whSchemaVersionQueryParam
-		}
 		if destType == warehouseutils.CLICKHOUSE {
 			enableArraySupport := fmt.Sprintf("chEnableArraySupport=%s", fmt.Sprintf("%v", trans.conf.GetBool("Warehouse.clickhouse.enableArraySupport", false)))
 			return destinationEndPoint + "?" + whSchemaVersionQueryParam + "&" + enableArraySupport

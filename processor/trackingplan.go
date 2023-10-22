@@ -27,25 +27,25 @@ func reportViolations(validateEvent *transformer.TransformerResponse, trackingPl
 	if validateEvent.Metadata.MergedTpConfig["propagateValidationErrors"] == "false" {
 		return
 	}
-	validationErrors := validateEvent.ValidationErrors
-	output := validateEvent.Output
 
-	eventContext, ok := output["context"]
+	eventContext, ok := validateEvent.Output["context"]
 	if !ok || eventContext == nil {
-		context := make(map[string]interface{})
-		context["trackingPlanId"] = trackingPlanId
-		context["trackingPlanVersion"] = trackingPlanVersion
-		context["violationErrors"] = validationErrors
-		output["context"] = context
+		c := make(map[string]interface{})
+		c["trackingPlanId"] = trackingPlanId
+		c["trackingPlanVersion"] = trackingPlanVersion
+		c["violationErrors"] = validateEvent.ValidationErrors
+
+		validateEvent.Output["context"] = c
 		return
 	}
-	context, castOk := eventContext.(map[string]interface{})
+
+	c, castOk := eventContext.(map[string]interface{})
 	if !castOk {
 		return
 	}
-	context["trackingPlanId"] = trackingPlanId
-	context["trackingPlanVersion"] = trackingPlanVersion
-	context["violationErrors"] = validationErrors
+	c["trackingPlanId"] = trackingPlanId
+	c["trackingPlanVersion"] = trackingPlanVersion
+	c["violationErrors"] = validateEvent.ValidationErrors
 }
 
 // enhanceWithViolation It enhances extra information of ValidationErrors in context for:
@@ -67,7 +67,15 @@ func enhanceWithViolation(response transformer.Response, trackingPlanId string, 
 // The Response will contain both the Events and FailedEvents
 // 1. eventsToTransform gets added to validatedEventsBySourceId
 // 2. failedJobs gets added to validatedErrorJobs
-func (proc *Handle) validateEvents(groupedEventsBySourceId map[SourceIDT][]transformer.TransformerEvent, eventsByMessageID map[string]types.SingularEventWithReceivedAt) (map[SourceIDT][]transformer.TransformerEvent, []*types.PUReportedMetric, []*jobsdb.JobT, map[SourceIDT]bool) {
+func (proc *Handle) validateEvents(
+	groupedEventsBySourceId map[SourceIDT][]transformer.TransformerEvent,
+	eventsByMessageID map[string]types.SingularEventWithReceivedAt,
+) (
+	map[SourceIDT][]transformer.TransformerEvent,
+	[]*types.PUReportedMetric,
+	[]*jobsdb.JobT,
+	map[SourceIDT]bool,
+) {
 	validatedEventsBySourceId := make(map[SourceIDT][]transformer.TransformerEvent)
 	validatedReportMetrics := make([]*types.PUReportedMetric, 0)
 	validatedErrorJobs := make([]*jobsdb.JobT, 0)
@@ -75,15 +83,21 @@ func (proc *Handle) validateEvents(groupedEventsBySourceId map[SourceIDT][]trans
 
 	for sourceId := range groupedEventsBySourceId {
 		eventList := groupedEventsBySourceId[sourceId]
-		validationStat := proc.newValidationStat(&eventList[0].Metadata)
+
+		if len(eventList) == 0 {
+			continue
+		}
+
+		validatedEventsBySourceId[sourceId] = make([]transformer.TransformerEvent, len(eventList))
+
+		sampleTransEvent := eventList[0]
+
+		validationStat := proc.newValidationStat(&sampleTransEvent.Metadata)
 		validationStat.numEvents.Count(len(eventList))
 		proc.logger.Debug("Validation input size", len(eventList))
 
-		// Checking if the tracking plan exists
-		isTpExists := eventList[0].Metadata.TrackingPlanId != ""
+		isTpExists := sampleTransEvent.Metadata.TrackingPlanId != ""
 		if !isTpExists {
-			// pass on the jobs for transformation(User, Dest)
-			validatedEventsBySourceId[sourceId] = make([]transformer.TransformerEvent, 0)
 			validatedEventsBySourceId[sourceId] = append(validatedEventsBySourceId[sourceId], eventList...)
 			continue
 		}
@@ -96,25 +110,38 @@ func (proc *Handle) validateEvents(groupedEventsBySourceId map[SourceIDT][]trans
 		// This is a safety check we are adding so that if something unexpected comes from transformer
 		// We are ignoring it.
 		if (len(response.Events) + len(response.FailedEvents)) != len(eventList) {
-			validatedEventsBySourceId[sourceId] = make([]transformer.TransformerEvent, 0)
 			validatedEventsBySourceId[sourceId] = append(validatedEventsBySourceId[sourceId], eventList...)
 			continue
 		}
 
-		enhanceWithViolation(response, eventList[0].Metadata.TrackingPlanId, eventList[0].Metadata.TrackingPlanVersion)
+		enhanceWithViolation(response, sampleTransEvent.Metadata.TrackingPlanId, sampleTransEvent.Metadata.TrackingPlanVersion)
 
-		transformerEvent := eventList[0]
-		destination := &transformerEvent.Destination
-		sourceID := transformerEvent.Metadata.SourceID
-		commonMetaData := makeCommonMetadataFromTransformerEvent(&transformerEvent)
+		destination := &sampleTransEvent.Destination
+		sourceID := sampleTransEvent.Metadata.SourceID
+		commonMetaData := makeCommonMetadataFromTransformerEvent(&sampleTransEvent)
 
 		// Set trackingPlanEnabledMap for the sourceID to true.
 		// This is being used to distinguish the flows in reporting service
 		trackingPlanEnabledMap[SourceIDT(sourceID)] = true
 
 		var successMetrics []*types.PUReportedMetric
-		eventsToTransform, successMetrics, _, _ := proc.getDestTransformerEvents(response, commonMetaData, eventsByMessageID, destination, transformer.TrackingPlanValidationStage, true, false) // Note: Sending false for usertransformation enabled is safe because this stage is before user transformation.
-		nonSuccessMetrics := proc.getNonSuccessfulMetrics(response, commonMetaData, eventsByMessageID, transformer.TrackingPlanValidationStage, false, true)
+		eventsToTransform, successMetrics, _, _ := proc.getDestTransformerEvents(
+			response,
+			commonMetaData,
+			eventsByMessageID,
+			destination,
+			transformer.TrackingPlanValidationStage,
+			true,
+			false,
+		) // Note: Sending false for usertransformation enabled is safe because this stage is before user transformation.
+		nonSuccessMetrics := proc.getNonSuccessfulMetrics(
+			response,
+			commonMetaData,
+			eventsByMessageID,
+			transformer.TrackingPlanValidationStage,
+			false,
+			true,
+		)
 
 		validationStat.numValidationSuccessEvents.Count(len(eventsToTransform))
 		validationStat.numValidationFailedEvents.Count(len(nonSuccessMetrics.failedJobs))
@@ -135,7 +162,7 @@ func (proc *Handle) validateEvents(groupedEventsBySourceId map[SourceIDT][]trans
 		if len(eventsToTransform) == 0 {
 			continue
 		}
-		validatedEventsBySourceId[sourceId] = make([]transformer.TransformerEvent, 0)
+
 		validatedEventsBySourceId[sourceId] = append(validatedEventsBySourceId[sourceId], eventsToTransform...)
 	}
 	return validatedEventsBySourceId, validatedReportMetrics, validatedErrorJobs, trackingPlanEnabledMap

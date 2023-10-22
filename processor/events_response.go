@@ -11,25 +11,26 @@ import (
 )
 
 func (proc *Handle) getDroppedJobs(response transformer.Response, eventsToTransform []transformer.TransformerEvent) []*jobsdb.JobT {
-	// each messageID is one event when sending to the transformer
 	inputMessageIDs := lo.Map(eventsToTransform, func(e transformer.TransformerEvent, _ int) string {
 		return e.Metadata.MessageID
 	})
 
-	// in transformer response, multiple messageIDs could be batched together
 	successFullMessageIDs := make([]string, 0)
 	lo.ForEach(response.Events, func(e transformer.TransformerResponse, _ int) {
 		successFullMessageIDs = append(successFullMessageIDs, e.Metadata.GetMessagesIDs()...)
 	})
-	// for failed as well
+
 	failedMessageIDs := make([]string, 0)
 	lo.ForEach(response.FailedEvents, func(e transformer.TransformerResponse, _ int) {
 		failedMessageIDs = append(failedMessageIDs, e.Metadata.GetMessagesIDs()...)
 	})
-	// the remainder of the messageIDs are those that are dropped
-	// we get jobs for those dropped messageIDs - for rsources_stats_collector
+
 	droppedMessageIDs, _ := lo.Difference(inputMessageIDs, append(successFullMessageIDs, failedMessageIDs...))
-	droppedMessageIDKeys := lo.SliceToMap(droppedMessageIDs, func(m string) (string, struct{}) { return m, struct{}{} })
+
+	droppedMessageIDKeys := lo.SliceToMap(droppedMessageIDs, func(m string) (string, struct{}) {
+		return m, struct{}{}
+	})
+
 	droppedJobs := make([]*jobsdb.JobT, 0)
 	for _, e := range eventsToTransform {
 		if _, ok := droppedMessageIDKeys[e.Metadata.MessageID]; ok {

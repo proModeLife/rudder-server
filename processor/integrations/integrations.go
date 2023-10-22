@@ -43,7 +43,7 @@ type PostParametersT struct {
 }
 
 type TransStatsT struct {
-	StatTags map[string]string `json:"statTags"`
+	StatTags stats.Tags `json:"statTags"`
 }
 type TransResponseT struct {
 	Message             string      `json:"message"`
@@ -54,26 +54,28 @@ type TransResponseT struct {
 func CollectDestErrorStats(input []byte) {
 	var integrationStat TransStatsT
 	err := json.Unmarshal(input, &integrationStat)
-	if err == nil {
-		if len(integrationStat.StatTags) > 0 {
-			stats.Default.NewTaggedStat("integration.failure_detailed", stats.CountType, integrationStat.StatTags).Increment()
-		}
+	if err != nil {
+		return
+	}
+	if len(integrationStat.StatTags) > 0 {
+		stats.Default.NewTaggedStat("integration.failure_detailed", stats.CountType, integrationStat.StatTags).Increment()
 	}
 }
 
 func CollectIntgTransformErrorStats(input []byte) {
 	var integrationStats []TransStatsT
 	err := json.Unmarshal(input, &integrationStats)
-	if err == nil {
-		for _, integrationStat := range integrationStats {
-			if len(integrationStat.StatTags) > 0 {
-				stats.Default.NewTaggedStat("integration.failure_detailed", stats.CountType, integrationStat.StatTags).Increment()
-			}
+	if err != nil {
+		return
+	}
+	for _, integrationStat := range integrationStats {
+		if len(integrationStat.StatTags) > 0 {
+			stats.Default.NewTaggedStat("integration.failure_detailed", stats.CountType, integrationStat.StatTags).Increment()
 		}
 	}
 }
 
-// GetPostInfo parses the transformer response
+// ValidatePostInfo parses the transformer response
 func ValidatePostInfo(transformRawParams PostParametersT) error {
 	transformRaw, err := json.Marshal(transformRawParams)
 	if err != nil {
@@ -107,36 +109,34 @@ func FilterClientIntegrations(clientEvent types.SingularEventT, destNameIDMap ma
 	if !ok {
 		return
 	}
+
 	// All is by default true, if not present make it true
-	allVal, found := clientIntgsList["All"]
-	if !found {
+	allVal, ok := clientIntgsList["All"]
+	if !ok {
 		allVal = true
 	}
-	_, isAllBoolean := allVal.(bool)
-	if !isAllBoolean {
+	allSet, ok := allVal.(bool)
+	if !ok {
 		return
 	}
-	var outVal []string
+
 	for dest := range destNameIDMap {
-		_, isBoolean := clientIntgsList[dest].(bool)
 		// if dest is bool and is present in clientIntgretaion list, check if true/false
-		if isBoolean {
-			if clientIntgsList[dest] == true {
-				outVal = append(outVal, destNameIDMap[dest].Name)
-			}
+		if d, ok := clientIntgsList[dest].(bool); ok && d {
+			retVal = append(retVal, destNameIDMap[dest].Name)
 			continue
 		}
+
 		// Always add for syntax dest:{...}
-		_, isMap := clientIntgsList[dest].(map[string]interface{})
-		if isMap {
-			outVal = append(outVal, destNameIDMap[dest].Name)
+		if _, ok := clientIntgsList[dest].(map[string]interface{}); ok {
+			retVal = append(retVal, destNameIDMap[dest].Name)
 			continue
 		}
-		// if dest  not present in clientIntgretaion list, add based on All flag
-		if allVal.(bool) {
-			outVal = append(outVal, destNameIDMap[dest].Name)
+
+		// if dest not present in clientIntgretaion list, add based on All flag
+		if allSet {
+			retVal = append(retVal, destNameIDMap[dest].Name)
 		}
 	}
-	retVal = outVal
 	return
 }

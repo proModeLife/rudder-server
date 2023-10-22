@@ -25,6 +25,7 @@ func (jd *Handle) isBackupEnabled() bool {
 	return jd.conf.backup.masterBackupEnabled.Load() && jd.conf.backup.instanceBackupEnabled.Load()
 }
 
+// Check with sid what this is?
 func (jd *Handle) IsMasterBackupEnabled() bool {
 	return jd.conf.backup.masterBackupEnabled.Load()
 }

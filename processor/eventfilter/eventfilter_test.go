@@ -27,7 +27,7 @@ func TestFilterEventsForHybridMode(t *testing.T) {
 	type filterConditionT struct {
 		destination        testDestinationT
 		source             testSourceT
-		event              *EventParams
+		event              *eventParams
 		isSupportedMsgType bool
 	}
 
@@ -75,7 +75,7 @@ func TestFilterEventsForHybridMode(t *testing.T) {
 					id:            "1src",
 					sourceDefType: "web",
 				},
-				event: &EventParams{
+				event: &eventParams{
 					MessageType: "track",
 				},
 			},
@@ -118,7 +118,7 @@ func TestFilterEventsForHybridMode(t *testing.T) {
 					id:            "1src",
 					sourceDefType: "web",
 				},
-				event: &EventParams{
+				event: &eventParams{
 					MessageType: "group",
 				},
 			},
@@ -161,7 +161,7 @@ func TestFilterEventsForHybridMode(t *testing.T) {
 					id:            "1src",
 					sourceDefType: "web",
 				},
-				event: &EventParams{
+				event: &eventParams{
 					MessageType: "track",
 				},
 			},
@@ -204,7 +204,7 @@ func TestFilterEventsForHybridMode(t *testing.T) {
 					id:            "1src",
 					sourceDefType: "web",
 				},
-				event: &EventParams{
+				event: &eventParams{
 					MessageType: "track",
 				},
 			},
@@ -247,7 +247,7 @@ func TestFilterEventsForHybridMode(t *testing.T) {
 					id:            "1src",
 					sourceDefType: "web",
 				},
-				event: &EventParams{
+				event: &eventParams{
 					MessageType: "track",
 				},
 			},
@@ -286,7 +286,7 @@ func TestFilterEventsForHybridMode(t *testing.T) {
 					id:            "1src",
 					sourceDefType: "web",
 				},
-				event: &EventParams{
+				event: &eventParams{
 					MessageType: "track",
 				},
 			},
@@ -324,7 +324,7 @@ func TestFilterEventsForHybridMode(t *testing.T) {
 					id:            "1src",
 					sourceDefType: "web",
 				},
-				event: &EventParams{
+				event: &eventParams{
 					MessageType: "track",
 				},
 			},
@@ -367,7 +367,7 @@ func TestFilterEventsForHybridMode(t *testing.T) {
 					id:            "1src",
 					sourceDefType: "web",
 				},
-				event: &EventParams{
+				event: &eventParams{
 					MessageType: "track",
 				},
 			},
@@ -403,8 +403,8 @@ func TestFilterEventsForHybridMode(t *testing.T) {
 				},
 			}
 
-			actualOutput := FilterEventsForHybridMode(
-				ConnectionModeFilterParams{
+			actualOutput := filterEventsForHybridMode(
+				connectionModeFilterParams{
 					SrcType:          source.SourceDefinition.Type,
 					Destination:      destination,
 					Event:            testCase.input.event,
@@ -449,7 +449,7 @@ func TestConvertToArrayOfType(t *testing.T) {
 
 	for _, strTestCase := range strTestCases {
 		t.Run(strTestCase.caseName, func(t *testing.T) {
-			actual := ConvertToArrayOfType[string](strTestCase.input)
+			actual := convertToArrayOfType[string](strTestCase.input)
 			require.EqualValues(t, strTestCase.expected, actual)
 		})
 	}
