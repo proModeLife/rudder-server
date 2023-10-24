@@ -130,6 +130,11 @@ func (a *embeddedApp) StartRudderCore(ctx context.Context, options *app.Options)
 		return err
 	}
 
+	transformerFeaturesService, err := NewTransformerFeaturesService(ctx)
+	if err != nil {
+		return err
+	}
+
 	// This separate gateway db is created just to be used with gateway because in case of degraded mode,
 	// the earlier created gwDb (which was created to be used mainly with processor) will not be running, and it
 	// will cause issues for gateway because gateway is supposed to receive jobs even in degraded mode.
@@ -319,7 +324,7 @@ func (a *embeddedApp) StartRudderCore(ctx context.Context, options *app.Options)
 		ctx,
 		config, logger.NewLogger().Child("gateway"), stats.Default,
 		a.app, backendconfig.DefaultBackendConfig, gatewayDB, errDBForWrite,
-		rateLimiter, a.versionHandler, rsourcesService, sourceHandle,
+		rateLimiter, a.versionHandler, rsourcesService, transformerFeaturesService, sourceHandle,
 	)
 	if err != nil {
 		return fmt.Errorf("could not setup gateway: %w", err)

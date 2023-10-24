@@ -17,6 +17,7 @@ import (
 	gwstats "github.com/rudderlabs/rudder-server/gateway/internal/stats"
 	gwtypes "github.com/rudderlabs/rudder-server/gateway/internal/types"
 	"github.com/rudderlabs/rudder-server/gateway/webhook/model"
+	"github.com/rudderlabs/rudder-server/services/transformer"
 	"github.com/rudderlabs/rudder-server/utils/misc"
 )
 
@@ -42,7 +43,7 @@ func newWebhookStats() *webhookStatsT {
 	return &wStats
 }
 
-func Setup(gwHandle Gateway, stat stats.Stats, opts ...batchTransformerOption) *HandleT {
+func Setup(gwHandle Gateway, transformerFeaturesService transformer.TransformerFeaturesService, stat stats.Stats, opts ...batchTransformerOption) *HandleT {
 	webhook := &HandleT{gwHandle: gwHandle, stats: stat, logger: logger.NewLogger().Child("gateway").Child("webhook")}
 
 	sourceTransformerURL := strings.TrimSuffix(config.GetString("DEST_TRANSFORM_URL", "http://localhost:9090"), "/") + "/v0/sources"
@@ -59,6 +60,7 @@ func Setup(gwHandle Gateway, stat stats.Stats, opts ...batchTransformerOption) *
 		webhook.config.sourceListForParsingParams[i] = strings.ToLower(s)
 	}
 
+	webhook.transformerFeaturesService = transformerFeaturesService
 	webhook.requestQ = make(map[string]chan *webhookT)
 	webhook.batchRequestQ = make(chan *batchWebhookT)
 	webhook.netClient = retryablehttp.NewClient()

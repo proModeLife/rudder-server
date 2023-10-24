@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/rudderlabs/rudder-server/app/cluster/state"
 	"github.com/rudderlabs/rudder-server/internal/enricher"
 	"github.com/rudderlabs/rudder-server/services/rsources"
+	"github.com/rudderlabs/rudder-server/services/transformer"
 	"github.com/rudderlabs/rudder-server/services/validators"
 	"github.com/rudderlabs/rudder-server/utils/misc"
 	"github.com/rudderlabs/rudder-server/utils/types/deployment"
@@ -74,6 +76,14 @@ func NewRsourcesService(deploymentType deployment.Type) (rsources.JobService, er
 	}
 
 	return rsources.NewJobService(rsourcesConfig)
+}
+
+// NewTransformerFeaturesService produces a transformer.TransformerFeaturesService through environment configuration (env variables & config file)
+func NewTransformerFeaturesService(ctx context.Context) (transformer.TransformerFeaturesService, error) {
+	var transformerFeaturesConfig transformer.TransformerFeatureServiceConfig
+	transformerFeaturesConfig.PollInterval = config.GetDuration("Transformer.pollInterval", 1, time.Second)
+
+	return transformer.NewTransformerFeatureService(ctx, transformerFeaturesConfig)
 }
 
 func resolveModeProvider(log logger.Logger, deploymentType deployment.Type) (cluster.ChangeEventProvider, error) {

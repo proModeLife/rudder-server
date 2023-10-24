@@ -137,6 +137,12 @@ func (a *processorApp) StartRudderCore(ctx context.Context, options *app.Options
 		return err
 	}
 
+	//TODO: Uncomment when necessary
+	/* transformerFeaturesService, err := NewTransformerFeaturesService(ctx)
+	if err != nil {
+		return err
+	} */
+
 	gwDBForProcessor := jobsdb.NewForRead(
 		"gw",
 		jobsdb.WithClearDB(options.ClearDB),

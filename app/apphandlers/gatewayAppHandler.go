@@ -122,11 +122,15 @@ func (a *gatewayApp) StartRudderCore(ctx context.Context, options *app.Options) 
 	if err != nil {
 		return err
 	}
+	transformerFeaturesService, err := NewTransformerFeaturesService(ctx)
+	if err != nil {
+		return err
+	}
 	err = gw.Setup(
 		ctx,
 		config, logger.NewLogger().Child("gateway"), stats.Default,
 		a.app, backendconfig.DefaultBackendConfig, gatewayDB, errDB,
-		rateLimiter, a.versionHandler, rsourcesService, sourceHandle,
+		rateLimiter, a.versionHandler, rsourcesService, transformerFeaturesService, sourceHandle,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to setup gateway: %w", err)

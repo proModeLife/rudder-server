@@ -24,6 +24,7 @@ import (
 	gwtypes "github.com/rudderlabs/rudder-server/gateway/internal/types"
 	"github.com/rudderlabs/rudder-server/gateway/response"
 	"github.com/rudderlabs/rudder-server/gateway/webhook/model"
+	"github.com/rudderlabs/rudder-server/services/transformer"
 	"github.com/rudderlabs/rudder-server/utils/misc"
 )
 
@@ -48,15 +49,16 @@ type Webhook interface {
 }
 
 type HandleT struct {
-	logger        logger.Logger
-	requestQMu    sync.RWMutex
-	requestQ      map[string]chan *webhookT
-	batchRequestQ chan *batchWebhookT
-	netClient     *retryablehttp.Client
-	gwHandle      Gateway
-	stats         stats.Stats
-	ackCount      uint64
-	recvCount     uint64
+	logger                     logger.Logger
+	requestQMu                 sync.RWMutex
+	requestQ                   map[string]chan *webhookT
+	batchRequestQ              chan *batchWebhookT
+	netClient                  *retryablehttp.Client
+	gwHandle                   Gateway
+	stats                      stats.Stats
+	ackCount                   uint64
+	recvCount                  uint64
+	transformerFeaturesService transformer.TransformerFeaturesService
 
 	batchRequestsWg  sync.WaitGroup
 	backgroundWait   func() error
@@ -187,6 +189,16 @@ func (webhook *HandleT) RequestHandler(w http.ResponseWriter, r *http.Request) {
 	if len(jsonByte) != 0 {
 		r.Body = io.NopCloser(bytes.NewReader(jsonByte))
 		r.Header.Set("Content-Type", "application/json")
+	}
+
+	// Proceeding only if transformer is up and features are fetched. TODO: Remove logs
+	webhook.logger.Info("checking if transformer is up and features are fetched.")
+	select {
+	case <-r.Context().Done():
+		return
+	case <-webhook.transformerFeaturesService.Wait():
+		webhook.logger.Info("Transformer features fetched.")
+		// proceed
 	}
 
 	done := make(chan transformerResponse)
