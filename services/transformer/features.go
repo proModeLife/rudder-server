@@ -3,7 +3,7 @@ package transformer
 import (
 	"context"
 	"time"
-
+	"github.com/rudderlabs/rudder-go-kit/config"
 	"github.com/rudderlabs/rudder-go-kit/logger"
 	"github.com/rudderlabs/rudder-server/utils/misc"
 )
@@ -11,13 +11,14 @@ import (
 type TransformerFeatureServiceConfig struct {
 	Log          logger.Logger
 	PollInterval time.Duration
+	transformerURL config.GetString("DEST_TRANSFORM_URL", "http://localhost:9090")
 }
 
 type TransformerFeaturesService interface {
-	GetSourceTransformerVersion() string
 	Wait() chan struct{}
 }
 
+// TOASK:
 func NewTransformerFeatureService(ctx context.Context, config TransformerFeatureServiceConfig) (TransformerFeaturesService, error) {
 	if config.Log == nil {
 		config.Log = logger.NewLogger().Child("transformer-features")
@@ -33,13 +34,3 @@ func NewTransformerFeatureService(ctx context.Context, config TransformerFeature
 
 	return handler, err
 }
-
-/* func NewNoOpService() TransformerFeaturesService {
-	return &noopService{}
-}
-
-type noopService struct{}
-
-func (*noopService) GetSourceTransformerVersion() string {
-	return "V0"
-} */
