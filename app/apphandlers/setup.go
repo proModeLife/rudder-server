@@ -82,6 +82,7 @@ func NewRsourcesService(deploymentType deployment.Type) (rsources.JobService, er
 func NewTransformerFeaturesService(ctx context.Context) (transformer.TransformerFeaturesService, error) {
 	var transformerFeaturesConfig transformer.TransformerFeatureServiceConfig
 	transformerFeaturesConfig.PollInterval = config.GetDuration("Transformer.pollInterval", 1, time.Second)
+	transformerFeaturesConfig.TransformerURL = config.GetString("DEST_TRANSFORM_URL", "http://localhost:9090")
 
 	return transformer.NewTransformerFeatureService(ctx, transformerFeaturesConfig)
 }

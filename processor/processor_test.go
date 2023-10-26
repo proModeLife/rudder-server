@@ -39,6 +39,7 @@ import (
 	transformationdebugger "github.com/rudderlabs/rudder-server/services/debugger/transformation"
 	"github.com/rudderlabs/rudder-server/services/fileuploader"
 	"github.com/rudderlabs/rudder-server/services/rsources"
+	tranformerFeaturesService "github.com/rudderlabs/rudder-server/services/transformer"
 	"github.com/rudderlabs/rudder-server/services/transientsource"
 	"github.com/rudderlabs/rudder-server/utils/misc"
 	"github.com/rudderlabs/rudder-server/utils/pubsub"
@@ -1064,6 +1065,7 @@ var _ = Describe("Processor", Ordered, func() {
 				transientsource.NewEmptyService(),
 				fileuploader.NewDefaultProvider(),
 				c.MockRsourcesService,
+				tranformerFeaturesService.NewNoOpService(),
 				destinationdebugger.NewNoOpService(),
 				transformationdebugger.NewNoOpService(),
 				[]enricher.PipelineEnricher{},
@@ -1093,6 +1095,7 @@ var _ = Describe("Processor", Ordered, func() {
 				transientsource.NewEmptyService(),
 				fileuploader.NewDefaultProvider(),
 				c.MockRsourcesService,
+				tranformerFeaturesService.NewNoOpService(),
 				destinationdebugger.NewNoOpService(),
 				transformationdebugger.NewNoOpService(),
 				[]enricher.PipelineEnricher{},
@@ -1127,6 +1130,7 @@ var _ = Describe("Processor", Ordered, func() {
 				transientsource.NewEmptyService(),
 				fileuploader.NewDefaultProvider(),
 				c.MockRsourcesService,
+				tranformerFeaturesService.NewNoOpService(),
 				destinationdebugger.NewNoOpService(),
 				transformationdebugger.NewNoOpService(),
 				[]enricher.PipelineEnricher{},
@@ -2046,7 +2050,6 @@ var _ = Describe("Processor", Ordered, func() {
 
 			// crash recover returns empty list
 			c.mockGatewayJobsDB.EXPECT().DeleteExecuting().Times(1)
-			processor.config.featuresRetryMaxAttempts = 0
 			processor.Setup(
 				c.mockBackendConfig,
 				c.mockGatewayJobsDB,
@@ -2060,6 +2063,7 @@ var _ = Describe("Processor", Ordered, func() {
 				transientsource.NewEmptyService(),
 				fileuploader.NewDefaultProvider(),
 				c.MockRsourcesService,
+				tranformerFeaturesService.NewNoOpService(),
 				destinationdebugger.NewNoOpService(),
 				transformationdebugger.NewNoOpService(),
 				[]enricher.PipelineEnricher{},
@@ -2104,7 +2108,6 @@ var _ = Describe("Processor", Ordered, func() {
 
 			// crash recover returns empty list
 			c.mockGatewayJobsDB.EXPECT().DeleteExecuting().Times(1)
-			processor.config.featuresRetryMaxAttempts = 0
 			processor.Setup(
 				c.mockBackendConfig,
 				c.mockGatewayJobsDB,
@@ -2118,6 +2121,7 @@ var _ = Describe("Processor", Ordered, func() {
 				transientsource.NewEmptyService(),
 				fileuploader.NewDefaultProvider(),
 				c.MockRsourcesService,
+				tranformerFeaturesService.NewNoOpService(),
 				destinationdebugger.NewNoOpService(),
 				transformationdebugger.NewNoOpService(),
 				[]enricher.PipelineEnricher{},
@@ -3729,6 +3733,7 @@ func Setup(processor *Handle, c *testContext, enableDedup, enableReporting bool)
 		transientsource.NewStaticService([]string{SourceIDTransient}),
 		fileuploader.NewDefaultProvider(),
 		c.MockRsourcesService,
+		tranformerFeaturesService.NewNoOpService(),
 		destinationdebugger.NewNoOpService(),
 		transformationdebugger.NewNoOpService(),
 		[]enricher.PipelineEnricher{},

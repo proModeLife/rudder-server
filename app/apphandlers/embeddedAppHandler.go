@@ -262,6 +262,7 @@ func (a *embeddedApp) StartRudderCore(ctx context.Context, options *app.Options)
 		transientSources,
 		fileUploaderProvider,
 		rsourcesService,
+		transformerFeaturesService,
 		destinationHandle,
 		transformationhandle,
 		enrichers,

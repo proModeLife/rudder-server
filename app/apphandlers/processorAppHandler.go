@@ -137,11 +137,10 @@ func (a *processorApp) StartRudderCore(ctx context.Context, options *app.Options
 		return err
 	}
 
-	//TODO: Uncomment when necessary
-	/* transformerFeaturesService, err := NewTransformerFeaturesService(ctx)
+	transformerFeaturesService, err := NewTransformerFeaturesService(ctx)
 	if err != nil {
 		return err
-	} */
+	}
 
 	gwDBForProcessor := jobsdb.NewForRead(
 		"gw",
@@ -253,6 +252,7 @@ func (a *processorApp) StartRudderCore(ctx context.Context, options *app.Options
 		transientSources,
 		fileUploaderProvider,
 		rsourcesService,
+		transformerFeaturesService,
 		destinationHandle,
 		transformationhandle,
 		enrichers,

@@ -63,7 +63,6 @@ func (gw *Handle) Setup(
 	gw.rateLimiter = rateLimiter
 	gw.versionHandler = versionHandler
 	gw.rsourcesService = rsourcesService
-	gw.transformerFeaturesService = transformerFeaturesService
 	gw.sourcehandle = sourcehandle
 
 	gw.conf.httpTimeout = config.GetDurationVar(30, time.Second, "Gateway.httpTimeout")
@@ -120,7 +119,7 @@ func (gw *Handle) Setup(
 	gw.batchUserWorkerBatchRequestQ = make(chan *batchUserWorkerBatchRequestT, gw.conf.maxDBWriterProcess)
 	gw.irh = &ImportRequestHandler{Handle: gw}
 	gw.rrh = &RegularRequestHandler{Handle: gw}
-	gw.webhook = webhook.Setup(gw, gw.transformerFeaturesService, gw.stats)
+	gw.webhook = webhook.Setup(gw, transformerFeaturesService, gw.stats)
 	whURL, err := url.ParseRequestURI(misc.GetWarehouseURL())
 	if err != nil {
 		return fmt.Errorf("invalid warehouse URL %s: %w", whURL, err)

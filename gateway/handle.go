@@ -31,7 +31,6 @@ import (
 	"github.com/rudderlabs/rudder-server/jobsdb"
 	sourcedebugger "github.com/rudderlabs/rudder-server/services/debugger/source"
 	"github.com/rudderlabs/rudder-server/services/rsources"
-	"github.com/rudderlabs/rudder-server/services/transformer"
 	"github.com/rudderlabs/rudder-server/utils/misc"
 	"github.com/rudderlabs/rudder-server/utils/types"
 )
@@ -39,18 +38,17 @@ import (
 type Handle struct {
 	// dependencies
 
-	config                     *config.Config
-	logger                     logger.Logger
-	stats                      stats.Stats
-	application                app.App
-	backendConfig              backendconfig.BackendConfig
-	jobsDB                     jobsdb.JobsDB
-	errDB                      jobsdb.JobsDB
-	rateLimiter                throttler.Throttler
-	versionHandler             func(w http.ResponseWriter, r *http.Request)
-	rsourcesService            rsources.JobService
-	transformerFeaturesService transformer.TransformerFeaturesService
-	sourcehandle               sourcedebugger.SourceDebugger
+	config          *config.Config
+	logger          logger.Logger
+	stats           stats.Stats
+	application     app.App
+	backendConfig   backendconfig.BackendConfig
+	jobsDB          jobsdb.JobsDB
+	errDB           jobsdb.JobsDB
+	rateLimiter     throttler.Throttler
+	versionHandler  func(w http.ResponseWriter, r *http.Request)
+	rsourcesService rsources.JobService
+	sourcehandle    sourcedebugger.SourceDebugger
 
 	// statistic measurements initialised during Setup
 

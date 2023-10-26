@@ -42,6 +42,7 @@ import (
 	"github.com/rudderlabs/rudder-server/services/fileuploader"
 	"github.com/rudderlabs/rudder-server/services/rmetrics"
 	"github.com/rudderlabs/rudder-server/services/rsources"
+	transformerFeaturesService "github.com/rudderlabs/rudder-server/services/transformer"
 	"github.com/rudderlabs/rudder-server/services/transientsource"
 	"github.com/rudderlabs/rudder-server/utils/misc"
 	. "github.com/rudderlabs/rudder-server/utils/tx" //nolint:staticcheck
@@ -63,10 +64,6 @@ func NewHandle(transformer transformer.Transformer) *Handle {
 	h.loadConfig()
 	return h
 }
-func () GetTranformerRouterFeatures() {
-	var transformerHandler = serviceTransformer.transformerHandler
-	return transformerHandler.GetTranformerRouterFeatures()
-}
 
 // Handle is a handle to the processor module
 type Handle struct {
@@ -74,35 +71,35 @@ type Handle struct {
 	transformer   transformer.Transformer
 	lastJobID     int64
 
-	gatewayDB                 jobsdb.JobsDB
-	routerDB                  jobsdb.JobsDB
-	batchRouterDB             jobsdb.JobsDB
-	readErrorDB               jobsdb.JobsDB
-	writeErrorDB              jobsdb.JobsDB
-	eventSchemaDB             jobsdb.JobsDB
-	archivalDB                jobsdb.JobsDB
-	transformerFeatures       transformer.transformerHandler
-	logger                    logger.Logger
-	eventSchemaHandler        types.EventSchemasI
-	enrichers                 []enricher.PipelineEnricher
-	dedup                     dedup.Dedup
-	reporting                 types.Reporting
-	reportingEnabled          bool
-	backgroundWait            func() error
-	backgroundCancel          context.CancelFunc
-	statsFactory              stats.Stats
-	stats                     processorStats
-	payloadLimit              misc.ValueLoader[int64]
-	jobsDBCommandTimeout      misc.ValueLoader[time.Duration]
-	jobdDBQueryRequestTimeout misc.ValueLoader[time.Duration]
-	jobdDBMaxRetries          misc.ValueLoader[int]
-	transientSources          transientsource.Service
-	fileuploader              fileuploader.Provider
-	rsourcesService           rsources.JobService
-	destDebugger              destinationdebugger.DestinationDebugger
-	transDebugger             transformationdebugger.TransformationDebugger
-	isolationStrategy         isolation.Strategy
-	limiter                   struct {
+	gatewayDB                  jobsdb.JobsDB
+	routerDB                   jobsdb.JobsDB
+	batchRouterDB              jobsdb.JobsDB
+	readErrorDB                jobsdb.JobsDB
+	writeErrorDB               jobsdb.JobsDB
+	eventSchemaDB              jobsdb.JobsDB
+	archivalDB                 jobsdb.JobsDB
+	logger                     logger.Logger
+	eventSchemaHandler         types.EventSchemasI
+	enrichers                  []enricher.PipelineEnricher
+	dedup                      dedup.Dedup
+	reporting                  types.Reporting
+	reportingEnabled           bool
+	backgroundWait             func() error
+	backgroundCancel           context.CancelFunc
+	statsFactory               stats.Stats
+	stats                      processorStats
+	payloadLimit               misc.ValueLoader[int64]
+	jobsDBCommandTimeout       misc.ValueLoader[time.Duration]
+	jobdDBQueryRequestTimeout  misc.ValueLoader[time.Duration]
+	jobdDBMaxRetries           misc.ValueLoader[int]
+	transientSources           transientsource.Service
+	fileuploader               fileuploader.Provider
+	rsourcesService            rsources.JobService
+	transformerFeaturesService transformerFeaturesService.TransformerFeaturesService
+	destDebugger               destinationdebugger.DestinationDebugger
+	transDebugger              transformationdebugger.TransformationDebugger
+	isolationStrategy          isolation.Strategy
+	limiter                    struct {
 		read       kitsync.Limiter
 		preprocess kitsync.Limiter
 		transform  kitsync.Limiter
@@ -111,7 +108,6 @@ type Handle struct {
 	config struct {
 		isolationMode             isolation.Mode
 		mainLoopTimeout           time.Duration
-		featuresRetryMaxAttempts  int
 		enablePipelining          bool
 		pipelineBufferedItems     int
 		subJobSize                int
@@ -348,6 +344,7 @@ func (proc *Handle) Setup(
 	transientSources transientsource.Service,
 	fileuploader fileuploader.Provider,
 	rsourcesService rsources.JobService,
+	transformerFeaturesService transformerFeaturesService.TransformerFeaturesService,
 	destDebugger destinationdebugger.DestinationDebugger,
 	transDebugger transformationdebugger.TransformationDebugger,
 	enrichers []enricher.PipelineEnricher,
@@ -372,6 +369,8 @@ func (proc *Handle) Setup(
 	proc.fileuploader = fileuploader
 	proc.rsourcesService = rsourcesService
 	proc.enrichers = enrichers
+
+	proc.transformerFeaturesService = transformerFeaturesService
 
 	if proc.adaptiveLimit == nil {
 		proc.adaptiveLimit = func(limit int64) int64 { return limit }
@@ -447,7 +446,7 @@ func (proc *Handle) Setup(
 	proc.backgroundWait = g.Wait
 	proc.backgroundCancel = cancel
 
-	proc.config.asyncInit = misc.NewAsyncInit(2)
+	proc.config.asyncInit = misc.NewAsyncInit(1)
 	g.Go(misc.WithBugsnag(func() error {
 		proc.backendConfigSubscriber(ctx)
 		return nil
@@ -524,6 +523,16 @@ func (proc *Handle) Start(ctx context.Context) error {
 		}
 		proc.logger.Info("Async init group done")
 
+		// waiting for init group
+		proc.logger.Info("Waiting for transformer features")
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-proc.transformerFeaturesService.Wait():
+			// proceed
+		}
+		proc.logger.Info("Transformer features received")
+
 		h := &workerHandleAdapter{proc}
 		pool := workerpool.New(ctx, func(partition string) workerpool.Worker { return newProcessorWorker(partition, h) }, proc.logger)
 		defer pool.Shutdown()
@@ -577,7 +586,6 @@ func (proc *Handle) Shutdown() {
 
 func (proc *Handle) loadConfig() {
 	proc.config.mainLoopTimeout = 200 * time.Millisecond
-	proc.config.featuresRetryMaxAttempts = 10
 
 	defaultSubJobSize := 2000
 	defaultMaxEventsToProcess := 10000
@@ -2281,7 +2289,7 @@ func (proc *Handle) transformSrcDest(
 	if transformAtOverrideFound {
 		transformAt = config.GetString("Processor."+destination.DestinationDefinition.Name+".transformAt", "processor")
 	}
-	transformAtFromFeaturesFile := gjson.Get(string(proc.transformerFeatures), fmt.Sprintf("routerTransform.%s", destination.DestinationDefinition.Name)).String()
+	transformAtFromFeaturesFile := gjson.Get(string(proc.transformerFeaturesService.GetTransformerFeatures()), fmt.Sprintf("routerTransform.%s", destination.DestinationDefinition.Name)).String()
 
 	// Filtering events based on the supported message types - START
 	s := time.Now()
