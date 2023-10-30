@@ -23,7 +23,7 @@ type transformerHandler struct {
 }
 
 func (t *transformerHandler) GetSourceTransformerVersion() string {
-	if gjson.Get(string(t.GetTransformerFeatures()), "sourceTransformV1").Bool() {
+	if gjson.Get(string(t.GetTransformerFeatures()), "supportSourceTransformV1").Bool() {
 		return "v1"
 	}
 

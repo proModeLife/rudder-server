@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -87,9 +88,9 @@ type webhookStatsT struct {
 }
 
 type batchWebhookTransformerT struct {
-	webhook              *HandleT
-	stats                *webhookStatsT
-	sourceTransformerURL string
+	webhook                    *HandleT
+	stats                      *webhookStatsT
+	transformerFeaturesService transformer.TransformerFeaturesService
 }
 
 type batchTransformerOption func(bt *batchWebhookTransformerT)
@@ -276,7 +277,12 @@ func (bt *batchWebhookTransformerT) batchTransformLoop() {
 	for breq := range bt.webhook.batchRequestQ {
 		var payloadArr [][]byte
 		var webRequests []*webhookT
+		sourceTransformVersion := bt.transformerFeaturesService.GetSourceTransformerVersion()
 		for _, req := range breq.batchRequest {
+			// GetSource from gateway using sourceId
+			sourceId := req.authContext.SourceID
+			source, err := bt.webhook.gwHandle.GetSource(sourceId)
+			marshalledSource, err := json.Marshal(source)
 			body, err := io.ReadAll(req.request.Body)
 			_ = req.request.Body.Close()
 
@@ -308,8 +314,17 @@ func (bt *batchWebhookTransformerT) batchTransformLoop() {
 				req.done <- transformerResponse{Err: response.GetStatus(response.InvalidJSON)}
 				continue
 			}
+			if sourceTransformVersion != "v0" {
+				format := "{\"event\": %s, \"source\": %s}"
+				// eventToSourceTransform = {event: body, source: source}
+				eventToSourceTransform := fmt.Sprintf(format, body, marshalledSource)
+				// Convert the formatted string to a []byte.
+				eventToSourceTransformBytes := []byte(eventToSourceTransform)
+				payloadArr = append(payloadArr, eventToSourceTransformBytes)
+			} else {
+				payloadArr = append(payloadArr, body)
+			}
 
-			payloadArr = append(payloadArr, body)
 			webRequests = append(webRequests, req)
 		}
 
@@ -325,7 +340,7 @@ func (bt *batchWebhookTransformerT) batchTransformLoop() {
 		bt.stats.sourceStats[breq.sourceType].numEvents.Count(len(payloadArr))
 
 		transformStart := time.Now()
-		batchResponse := bt.transform(payloadArr, breq.sourceType)
+		batchResponse := bt.transform(payloadArr, breq.sourceType, sourceTransformVersion)
 
 		// stats
 		bt.stats.sourceStats[breq.sourceType].sourceTransform.Since(transformStart)

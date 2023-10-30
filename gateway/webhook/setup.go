@@ -9,16 +9,17 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-retryablehttp"
-	"golang.org/x/sync/errgroup"
-
 	"github.com/rudderlabs/rudder-go-kit/config"
+
 	"github.com/rudderlabs/rudder-go-kit/logger"
 	"github.com/rudderlabs/rudder-go-kit/stats"
+	backendconfig "github.com/rudderlabs/rudder-server/backend-config"
 	gwstats "github.com/rudderlabs/rudder-server/gateway/internal/stats"
 	gwtypes "github.com/rudderlabs/rudder-server/gateway/internal/types"
 	"github.com/rudderlabs/rudder-server/gateway/webhook/model"
 	"github.com/rudderlabs/rudder-server/services/transformer"
 	"github.com/rudderlabs/rudder-server/utils/misc"
+	"golang.org/x/sync/errgroup"
 )
 
 type Gateway interface {
@@ -26,6 +27,7 @@ type Gateway interface {
 	ProcessWebRequest(writer *http.ResponseWriter, req *http.Request, reqType string, requestPayload []byte, arctx *gwtypes.AuthRequestContext) string
 	NewSourceStat(arctx *gwtypes.AuthRequestContext, reqType string) *gwstats.SourceStat
 	SaveWebhookFailures([]*model.FailedWebhookPayload) error
+	GetSource(sourceID string) (*backendconfig.SourceT, error)
 }
 
 type WebHookI interface {
@@ -45,8 +47,6 @@ func newWebhookStats() *webhookStatsT {
 
 func Setup(gwHandle Gateway, transformerFeaturesService transformer.TransformerFeaturesService, stat stats.Stats, opts ...batchTransformerOption) *HandleT {
 	webhook := &HandleT{gwHandle: gwHandle, stats: stat, logger: logger.NewLogger().Child("gateway").Child("webhook")}
-
-	sourceTransformerURL := strings.TrimSuffix(config.GetString("DEST_TRANSFORM_URL", "http://localhost:9090"), "/") + "/v0/sources"
 	// Number of incoming webhooks that are batched before calling source transformer
 	webhook.config.maxWebhookBatchSize = config.GetReloadableIntVar(32, 1, "Gateway.webhook.maxBatchSize")
 	// Timeout after which batch is formed anyway with whatever webhooks are available
@@ -77,9 +77,9 @@ func Setup(gwHandle Gateway, transformerFeaturesService transformer.TransformerF
 	for i := 0; i < maxTransformerProcess; i++ {
 		g.Go(misc.WithBugsnag(func() error {
 			bt := batchWebhookTransformerT{
-				webhook:              webhook,
-				stats:                newWebhookStats(),
-				sourceTransformerURL: sourceTransformerURL,
+				webhook:                    webhook,
+				stats:                      newWebhookStats(),
+				transformerFeaturesService: transformerFeaturesService,
 			}
 			for _, opt := range opts {
 				opt(&bt)
