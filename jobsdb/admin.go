@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/samber/lo"
-
 	"github.com/rudderlabs/rudder-server/utils/misc"
 )
 
@@ -165,57 +163,7 @@ func (jd *Handle) startCleanupLoop(ctx context.Context) {
 }
 
 func (jd *Handle) doCleanup(ctx context.Context, batchSize int) error {
-	// 1. cleanup old jobs
-	gather := func(f func(ctx context.Context, states []string, params GetQueryParams) (JobsResult, error), states []string, params GetQueryParams) ([]*JobStatusT, error) {
-		res := make([]*JobStatusT, 0)
-		var done bool
-		var afterJobID *int64
-		for !done {
-			params.IgnoreCustomValFiltersInQuery = true
-			params.JobsLimit = batchSize
-			params.afterJobID = afterJobID
-			jobsResult, err := f(ctx, states, params)
-			if err != nil {
-				return nil, err
-			}
-			jobs := lo.Filter(
-				jobsResult.Jobs,
-				func(job *JobT, _ int) bool {
-					return job.CreatedAt.Before(time.Now().Add(-jd.conf.jobMaxAge()))
-				},
-			)
-			if len(jobs) > 0 {
-				afterJobID = &(jobs[len(jobs)-1].JobID)
-				res = append(res, lo.Map(jobs, func(job *JobT, _ int) *JobStatusT {
-					return &JobStatusT{
-						JobID:         job.JobID,
-						JobState:      Aborted.State,
-						ErrorCode:     "0",
-						AttemptNum:    job.LastJobStatus.AttemptNum,
-						ErrorResponse: []byte(`{"reason": "job max age exceeded"}`),
-					}
-				})...)
-			}
-			if len(jobs) < batchSize {
-				done = true
-			}
-		}
-		return res, nil
-	}
-
-	statusList, err := gather(jd.GetJobs, []string{Failed.State, Executing.State, Waiting.State, Unprocessed.State}, GetQueryParams{})
-	if err != nil {
-		return fmt.Errorf("gathering job statuses: %w", err)
-	}
-
-	if len(statusList) > 0 {
-		if err := jd.UpdateJobStatus(ctx, statusList, nil, nil); err != nil {
-			return err
-		}
-		jd.logger.Infof("cleaned up %d old jobs", len(statusList))
-	}
-
-	// 2. cleanup journal
+	// 1. cleanup journal
 	{
 		deleteStmt := "DELETE FROM %s_journal WHERE start_time < NOW() - INTERVAL '%d DAY'"
 		var journalEntryCount int64

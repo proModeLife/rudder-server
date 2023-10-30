@@ -159,7 +159,7 @@ func TestMigration(t *testing.T) {
 			customVal,
 		).Scan(&count)
 		require.NoError(t, err)
-		require.EqualValues(t, 1, count)
+		require.EqualValues(t, 1, count, "number of jobs after migration")
 
 		// second DS must be untouched by this migrationLoop
 		require.Equal(t, `2`, dsList[1].Index)
@@ -202,6 +202,61 @@ func TestMigration(t *testing.T) {
 		).Scan(&count)
 		require.NoError(t, err)
 		require.EqualValues(t, 10, count)
+	})
+
+	t.Run("cleans up jobs that are older than max age", func(t *testing.T) {
+		config.Reset()
+		c := config.New()
+		c.Set("JobsDB.maxDSSize", 1)
+		c.Set("JobsDB.jobMaxAge", "1ms")
+
+		_ = startPostgres(t)
+
+		triggerAddNewDS := make(chan time.Time)
+		triggerMigrateDS := make(chan time.Time)
+
+		jobDB := Handle{
+			TriggerAddNewDS: func() <-chan time.Time {
+				return triggerAddNewDS
+			},
+			TriggerMigrateDS: func() <-chan time.Time {
+				return triggerMigrateDS
+			},
+			config: c,
+		}
+		tablePrefix := strings.ToLower(rand.String(5))
+		err := jobDB.Setup(
+			ReadWrite,
+			true,
+			tablePrefix,
+			[]prebackup.Handler{},
+			fileuploader.NewDefaultProvider(),
+		)
+		require.NoError(t, err)
+		defer jobDB.TearDown()
+
+		customVal := rand.String(5)
+		jobs := genJobs(defaultWorkspaceID, customVal, 20, 1)
+		require.NoError(t, jobDB.Store(context.Background(), jobs[:10]))
+
+		require.EqualValues(t, 1, jobDB.GetMaxDSIndex())
+		triggerAddNewDS <- time.Now() // trigger addNewDSLoop to run
+		triggerAddNewDS <- time.Now() // Second time, waits for the first loop to finish
+		require.EqualValues(t, 2, jobDB.GetMaxDSIndex())
+
+		// add some more jobs to the new DS
+		require.NoError(t, jobDB.Store(context.Background(), jobs[10:20]))
+
+		triggerAddNewDS <- time.Now() // trigger addNewDSLoop to run
+		triggerAddNewDS <- time.Now() // Second time, waits for the first loop to finish
+		require.EqualValues(t, 3, jobDB.GetMaxDSIndex())
+
+		triggerMigrateDS <- time.Now() // trigger migrateDSLoop to run
+		triggerMigrateDS <- time.Now() // waits for last loop to finish
+
+		dsList := jobDB.getDSList()
+		require.Equal(t, `3`, dsList[0].Index)
+		require.Equal(t, 1, len(dsList))
 	})
 
 	t.Run("cleanup status tables", func(t *testing.T) {

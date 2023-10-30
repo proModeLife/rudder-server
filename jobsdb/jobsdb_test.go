@@ -1208,28 +1208,6 @@ func TestFailExecuting(t *testing.T) {
 
 func TestMaxAgeCleanup(t *testing.T) {
 	_ = startPostgres(t)
-	customVal := "CUSTOMVAL"
-	workspaceID := "workspaceID"
-	generateJobs := func(numOfJob int, destinationID string) []*JobT {
-		js := make([]*JobT, numOfJob)
-		for i := 0; i < numOfJob; i++ {
-			js[i] = &JobT{
-				Parameters: []byte(fmt.Sprintf(
-					`{"batch_id":1,"source_id":"sourceID","destination_id":%q}`,
-					destinationID,
-				)),
-				EventPayload: []byte(`{"testKey":"testValue"}`),
-				UserID:       "a-292e-4e79-9880-f8009e0ae4a3",
-				UUID:         uuid.New(),
-				CustomVal:    customVal,
-				EventCount:   1,
-				WorkspaceId:  workspaceID,
-			}
-		}
-		return js
-	}
-
-	destinationID := strings.ToLower(rsRand.String(5))
 	t.Setenv("RSERVER_JOBS_DB_JOB_MAX_AGE", "0")
 	triggerJobCleanup := make(chan time.Time)
 	jobsDB := &Handle{
@@ -1251,27 +1229,6 @@ func TestMaxAgeCleanup(t *testing.T) {
 	// run cleanup once with an empty db
 	require.NoError(t, jobsDB.doCleanup(context.Background(), 200))
 
-	// store some jobs
-	require.NoError(
-		t,
-		jobsDB.Store(
-			context.Background(),
-			generateJobs(2, destinationID),
-		),
-	)
-
-	unprocessed, err := jobsDB.GetUnprocessed(
-		context.Background(),
-		GetQueryParams{
-			CustomValFilters: []string{customVal},
-			ParameterFilters: []ParameterFilterT{
-				{Name: "destination_id", Value: destinationID},
-			},
-			JobsLimit: 100,
-		})
-	require.NoError(t, err)
-	require.Equal(t, 2, len(unprocessed.Jobs))
-
 	// store some journal entries
 	timeDelay := time.Duration(-12) * time.Hour * 24
 	t.Log(time.Now().Add(timeDelay))
@@ -1289,32 +1246,6 @@ func TestMaxAgeCleanup(t *testing.T) {
 	require.NoError(t, jobsDB.doCleanup(context.Background(), 200))
 	triggerJobCleanup <- time.Now()
 	triggerJobCleanup <- time.Now()
-
-	abortedJobs, err := jobsDB.GetAborted(
-		context.Background(),
-		GetQueryParams{
-			CustomValFilters: []string{customVal},
-			ParameterFilters: []ParameterFilterT{
-				{Name: "destination_id", Value: destinationID},
-			},
-			JobsLimit: 100,
-		},
-	)
-	require.NoError(t, err)
-	require.Equal(t, 2, len(abortedJobs.Jobs))
-
-	unprocessed, err = jobsDB.GetUnprocessed(
-		context.Background(),
-		GetQueryParams{
-			CustomValFilters: []string{customVal},
-			ParameterFilters: []ParameterFilterT{
-				{Name: "destination_id", Value: destinationID},
-			},
-			JobsLimit: 100,
-		},
-	)
-	require.NoError(t, err)
-	require.Equal(t, 0, len(unprocessed.Jobs))
 
 	var journalEntryCount int
 	err = jobsDB.dbHandle.QueryRow(`select count(*) from ` + tablePrefix + `_journal`).Scan(&journalEntryCount)

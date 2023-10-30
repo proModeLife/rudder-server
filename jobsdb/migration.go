@@ -435,12 +435,12 @@ func (jd *Handle) migrateJobsInTx(ctx context.Context, tx *Tx, srcDS, destDS dat
 		(
 			insert into %[3]q (job_id,   workspace_id,   uuid,   user_id,   custom_val,   parameters,   event_payload,   event_count,   created_at,   expire_at)
 			           (select j.job_id, j.workspace_id, j.uuid, j.user_id, j.custom_val, j.parameters, j.event_payload, j.event_count, j.created_at, j.expire_at from %[2]q j left join last_status js on js.job_id = j.job_id
-				where js.job_id is null or js.job_state = ANY('{%[5]s}') order by j.job_id) returning job_id
+				where (js.job_id is null or js.job_state = ANY('{%[5]s}')) and j.created_at > $1 order by j.job_id) returning job_id
 		),
 		insertedStatuses as
 		(
 			insert into %[4]q (job_id, job_state, attempt, exec_time, retry_time, error_code, error_response, parameters)
-			           (select job_id, job_state, attempt, exec_time, retry_time, error_code, error_response, parameters from last_status where job_state = ANY('{%[5]s}'))
+			           (select job_id, job_state, attempt, exec_time, retry_time, error_code, error_response, parameters from last_status where job_id in (select * from inserted_jobs))
 		)
 		select count(*) from inserted_jobs;`,
 		srcDS.JobStatusTable,
@@ -454,6 +454,7 @@ func (jd *Handle) migrateJobsInTx(ctx context.Context, tx *Tx, srcDS, destDS dat
 	if err := tx.QueryRowContext(
 		ctx,
 		compactDSQuery,
+		time.Now().Add(-1*jd.conf.jobMaxAge()),
 	).Scan(&numJobsMigrated); err != nil {
 		return 0, err
 	}
@@ -536,12 +537,14 @@ func (jd *Handle) checkIfMigrateDS(ds dataSetT) (
 		return false, false, 0, fmt.Errorf("error getting count of jobs in %s: %w", ds.JobTable, err)
 	}
 
-	// Jobs which have either succeeded or expired
-	sqlStatement = fmt.Sprintf(`SELECT COUNT(DISTINCT(job_id))
-                                      from %q
-                                      WHERE job_state IN ('%s')`,
-		ds.JobStatusTable, strings.Join(validTerminalStates, "', '"))
-	if err = jd.dbHandle.QueryRow(sqlStatement).Scan(&delCount); err != nil {
+	// Jobs which have either terminal or expired
+	sqlStatement = fmt.Sprintf(`select COUNT(DISTINCT(job_id)) from (
+		select job_id from %q WHERE job_state IN ('%s')
+		union 
+		select job_id from %q where created_at < ($1)) terminalOrOldJobs;`,
+		ds.JobStatusTable, strings.Join(validTerminalStates, "', '"), ds.JobTable,
+	)
+	if err = jd.dbHandle.QueryRow(sqlStatement, time.Now().Add(-1*jd.conf.jobMaxAge())).Scan(&delCount); err != nil {
 		return false, false, 0, fmt.Errorf("error getting count of jobs in %s: %w", ds.JobStatusTable, err)
 	}
 
