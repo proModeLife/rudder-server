@@ -7,7 +7,7 @@ package mockwebhook
 import (
 	http "net/http"
 	reflect "reflect"
-
+	backendconfig "github.com/rudderlabs/rudder-server/backend-config"
 	gomock "github.com/golang/mock/gomock"
 	stats "github.com/rudderlabs/rudder-server/gateway/internal/stats"
 	types "github.com/rudderlabs/rudder-server/gateway/internal/types"
@@ -24,7 +24,20 @@ type MockGateway struct {
 type MockGatewayMockRecorder struct {
 	mock *MockGateway
 }
+// GetSource mocks base method.
+func (m *MockGateway) GetSource(arg0 string) (*backendconfig.SourceT, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSource", arg0)
+	ret0, _ := ret[0].(*backendconfig.SourceT)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
 
+// GetSource indicates an expected call of GetSource.
+func (mr *MockGatewayMockRecorder) GetSource(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSource", reflect.TypeOf((*MockGateway)(nil).GetSource), arg0)
+}
 // NewMockGateway creates a new mock instance.
 func NewMockGateway(ctrl *gomock.Controller) *MockGateway {
 	mock := &MockGateway{ctrl: ctrl}
